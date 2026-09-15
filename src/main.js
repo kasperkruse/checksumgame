@@ -2154,7 +2154,7 @@ function restartGame() {
 
 function updateNeighbor() {
   const time = clock.getElapsedTime();
-  const mowed = grassBlades.filter(b => !b.userData.isTall).length;
+  const mowed = grassBlades.filter(b => !b.isTall).length;
   const percent = (mowed / totalGrass) * 100;
 
   if (neighborState === 'waiting' && percent > 25) {
@@ -2685,7 +2685,7 @@ function createPaintSections() {
 
 function updateHUD() {
   if (currentLevel === 1) {
-    const mowed = grassBlades.filter(b => !b.userData.isTall).length;
+    const mowed = grassBlades.filter(b => !b.isTall).length;
     const percent = Math.floor((mowed / totalGrass) * 100);
     document.getElementById('grass-percent').textContent = percent;
   } else if (currentLevel === 2) {
@@ -2698,7 +2698,7 @@ function updateHUD() {
 
 function checkCompletion() {
   if (currentLevel === 1) {
-    const mowed = grassBlades.filter(b => !b.userData.isTall).length;
+    const mowed = grassBlades.filter(b => !b.isTall).length;
     const percent = (mowed / totalGrass) * 100;
 
     if (percent >= 100 && !completed) {
