@@ -1,5 +1,10 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { EventBus, GameEvents } from './systems/EventBus.js';
+import { GameStateManager, Phase } from './systems/GameStateManager.js';
+import { MowerPhysics } from './systems/MowerPhysics.js';
+import { ProjectileSystem } from './systems/ProjectileSystem.js';
+import { RagdollController } from './systems/RagdollController.js';
 
 const WORLD_SIZE = 30;
 const GRASS_DENSITY = 8;
@@ -7,6 +12,7 @@ const PLAYER_SPEED = 0.07;
 const MOUSE_SENSITIVITY = 0.002;
 const MOW_RADIUS = 1.0;
 const MOW_REWARD = 100;
+const TALL_CELL = 1.5;
 
 let scene, camera, renderer;
 let mower;
@@ -45,8 +51,29 @@ let neighborPoodleTarget = new THREE.Vector3();
 let neighborPoodleWait = 0;
 let neighborState = 'waiting';
 let neighborAnger = 0;
+let neighborDistractUntil = 0;
+let neighborDistractPos = new THREE.Vector3();
+let neighborStateBeforeDistract = 'fighting';
 let showingDialog = false;
 let playerHealth = 100;
+
+// Modular gameplay systems from the setup-env branch. main.js still owns the
+// world, GLTF content and neighbor fistfight; these systems add smash physics,
+// projectiles, crash-ragdoll, and a shared event bus for phase changes.
+let bus, gameState, mowerPhysics, projectiles, ragdoll, ctx;
+let currentPhase = Phase.MOWING;
+const player = {
+  pos: playerPos,
+  getYaw: () => playerYaw,
+  getPitch: () => playerPitch,
+  controlsEnabled: true,
+  isRagdolled: false,
+};
+let obstacles = [];
+let pickups = [];
+let decoyMarker = null;
+let decoyCooldown = 0;
+let tallGrassGrid = new Map();
 
 let audioContext = null;
 let mowerGain = null;
@@ -271,13 +298,19 @@ async function init() {
   createRoofBirds();
   createFirstPersonArms();
   createFirstPersonMower();
-  
+  createObstacles();
+  createPickups();
+  createDecoyMarker();
+
   // Wife appears randomly
   wifeNextAppearance = 10 + Math.random() * 20;
 
+  setupSystems();
   setupControls();
   window.addEventListener('resize', onWindowResize);
   document.getElementById('restart-btn').addEventListener('click', restartGame);
+  const restartOver = document.getElementById('restart-btn-over');
+  if (restartOver) restartOver.addEventListener('click', restartGame);
 
   renderer.domElement.addEventListener('click', () => {
     if (!showingDialog) {
@@ -1465,9 +1498,18 @@ function createFirstPersonMower() {
 }
   
 
+function tallCellKey(x, z) {
+  return `${Math.floor(x / TALL_CELL)},${Math.floor(z / TALL_CELL)}`;
+}
+
+function isTallGrassAt(x, z) {
+  return (tallGrassGrid.get(tallCellKey(x, z)) || 0) > 0;
+}
+
 function createGrass() {
   grassBlades = [];
   totalGrass = 0;
+  tallGrassGrid = new Map();
 
   const fenceInner = FENCE_SIZE - 0.5;
   
@@ -1563,6 +1605,8 @@ function createGrass() {
       instanceIndex: instanceIndex // Direct reference to instanced mesh index
     });
     totalGrass++;
+    const key = tallCellKey(pos.x, pos.z);
+    tallGrassGrid.set(key, (tallGrassGrid.get(key) || 0) + 1);
   });
   
   // Store instanced meshes for later modification
@@ -1897,6 +1941,18 @@ function createNeighbor() {
   rightLeg.add(rightShoe);
   neighbor.add(rightLeg);
   neighbor.userData.rightLeg = rightLeg;
+
+  const paintSplat = new THREE.Group();
+  const splatMat = new THREE.MeshLambertMaterial({ color: 0x3aa0ff });
+  for (let i = 0; i < 5; i++) {
+    const blob = new THREE.Mesh(new THREE.SphereGeometry(0.08 + Math.random() * 0.05, 8, 6), splatMat);
+    blob.position.set((Math.random() - 0.5) * 0.3, 1.55 + (Math.random() - 0.5) * 0.2, 0.24);
+    blob.scale.z = 0.4;
+    paintSplat.add(blob);
+  }
+  paintSplat.visible = false;
+  neighbor.add(paintSplat);
+  neighbor.userData.paintSplat = paintSplat;
 
   neighbor.position.set(NEIGHBOR_SUNBED_POS.x, 0, NEIGHBOR_SUNBED_POS.z);
   neighbor.visible = true;
@@ -2724,6 +2780,268 @@ function playWifeWhistle() {
   });
 }
 
+function playCrashSound() {
+  if (!audioContext) return;
+  const now = audioContext.currentTime;
+
+  const osc = audioContext.createOscillator();
+  const gain = audioContext.createGain();
+  osc.type = 'square';
+  osc.frequency.setValueAtTime(220, now);
+  osc.frequency.exponentialRampToValueAtTime(50, now + 0.25);
+  gain.gain.setValueAtTime(0.25, now);
+  gain.gain.exponentialRampToValueAtTime(0.01, now + 0.3);
+  osc.connect(gain); gain.connect(audioContext.destination);
+  osc.start(now); osc.stop(now + 0.3);
+
+  const noiseGain = audioContext.createGain();
+  noiseGain.gain.setValueAtTime(0.2, now);
+  noiseGain.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
+  const bufferSize = audioContext.sampleRate * 0.25;
+  const buf = audioContext.createBuffer(1, bufferSize, audioContext.sampleRate);
+  const out = buf.getChannelData(0);
+  for (let i = 0; i < bufferSize; i++) out[i] = (Math.random() * 2 - 1) * (1 - i / bufferSize);
+  const noise = audioContext.createBufferSource();
+  noise.buffer = buf;
+  noise.connect(noiseGain); noiseGain.connect(audioContext.destination);
+  noise.start(now);
+}
+
+function playDecoySound() {
+  if (!audioContext) return;
+  const now = audioContext.currentTime;
+  const osc = audioContext.createOscillator();
+  const gain = audioContext.createGain();
+  osc.type = 'triangle';
+  osc.frequency.setValueAtTime(880, now);
+  osc.frequency.setValueAtTime(1320, now + 0.1);
+  osc.frequency.setValueAtTime(880, now + 0.2);
+  gain.gain.setValueAtTime(0.12, now);
+  gain.gain.exponentialRampToValueAtTime(0.01, now + 0.3);
+  osc.connect(gain); gain.connect(audioContext.destination);
+  osc.start(now); osc.stop(now + 0.3);
+}
+
+function createObstacles() {
+  obstacles = [];
+  const rockMat = new THREE.MeshLambertMaterial({ color: 0x8a8a8a });
+  const rockPositions = [
+    { x: -6, z: -2, r: 0.5 }, { x: 3, z: 4, r: 0.55 }, { x: -3, z: 6, r: 0.45 },
+    { x: 6, z: 5, r: 0.5 }, { x: -7, z: 3, r: 0.5 },
+  ];
+  rockPositions.forEach(({ x, z, r }) => {
+    if (isInHouseArea(x, z) || isOnPath(x, z) || isOnDeck(x, z)) return;
+    const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(r, 0), rockMat);
+    rock.position.set(x, r * 0.7, z);
+    rock.rotation.set(Math.random(), Math.random(), Math.random());
+    rock.castShadow = true;
+    scene.add(rock);
+    obstacles.push({ position: new THREE.Vector3(x, 0, z), radius: r + 0.1, mesh: rock });
+  });
+
+  const gnomePositions = [{ x: 0, z: 5 }, { x: -5, z: -4 }, { x: 5, z: -3 }];
+  gnomePositions.forEach(({ x, z }) => {
+    if (isInHouseArea(x, z) || isOnPath(x, z) || isOnDeck(x, z)) return;
+    const gnome = createGnome();
+    gnome.position.set(x, 0, z);
+    scene.add(gnome);
+    obstacles.push({ position: new THREE.Vector3(x, 0, z), radius: 0.5, mesh: gnome });
+  });
+}
+
+function createGnome() {
+  const gnome = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.ConeGeometry(0.22, 0.5, 8), new THREE.MeshLambertMaterial({ color: 0x2e7d32 }));
+  body.position.y = 0.35; body.castShadow = true; gnome.add(body);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.15, 10, 8), new THREE.MeshLambertMaterial({ color: 0xE8B98F }));
+  head.position.y = 0.62; gnome.add(head);
+  const hat = new THREE.Mesh(new THREE.ConeGeometry(0.17, 0.35, 8), new THREE.MeshLambertMaterial({ color: 0xCC2222 }));
+  hat.position.y = 0.85; gnome.add(hat);
+  const beard = new THREE.Mesh(new THREE.ConeGeometry(0.13, 0.25, 8), new THREE.MeshLambertMaterial({ color: 0xf5f5f5 }));
+  beard.position.set(0, 0.5, 0.1); beard.rotation.x = Math.PI; gnome.add(beard);
+  return gnome;
+}
+
+function createPickups() {
+  pickups.forEach((p) => { if (p.mesh) scene.remove(p.mesh); });
+  pickups.length = 0;
+  const defs = [
+    { x: -4, z: 2, color: 0xff3b30 },
+    { x: 2, z: -1, color: 0xffcc00 },
+    { x: -2, z: -3, color: 0x34c759 },
+    { x: 5, z: 2, color: 0xff9500 },
+    { x: -6, z: 6, color: 0xaf52de },
+    { x: 4, z: 7, color: 0xff3b30 },
+    { x: 0, z: 3, color: 0xffcc00 },
+    { x: -1, z: 8, color: 0x34c759 },
+  ];
+  defs.forEach(({ x, z, color }) => {
+    if (isInHouseArea(x, z) || isOnPath(x, z) || isOnDeck(x, z)) return;
+    const mesh = new THREE.Mesh(
+      new THREE.SphereGeometry(0.18, 10, 8),
+      new THREE.MeshLambertMaterial({ color })
+    );
+    mesh.position.set(x, 0.18, z);
+    mesh.castShadow = true;
+    scene.add(mesh);
+    pickups.push({ mesh, position: mesh.position, radius: 0.25, alive: true, color });
+  });
+}
+
+function createDecoyMarker() {
+  decoyMarker = new THREE.Group();
+  const ring = new THREE.Mesh(
+    new THREE.TorusGeometry(0.4, 0.06, 8, 20),
+    new THREE.MeshBasicMaterial({ color: 0xffee33 })
+  );
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.y = 0.1;
+  decoyMarker.add(ring);
+  const beacon = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.05, 0.05, 1.2, 6),
+    new THREE.MeshBasicMaterial({ color: 0xffee33 })
+  );
+  beacon.position.y = 0.6;
+  decoyMarker.add(beacon);
+  decoyMarker.visible = false;
+  scene.add(decoyMarker);
+}
+
+function throwDecoy() {
+  const chasing = neighborState === 'approaching' || neighborState === 'fighting' || neighborState === 'walking_to_gate';
+  if (!chasing || !player.controlsEnabled) return;
+  if (decoyCooldown > 0) return;
+  decoyCooldown = 6;
+
+  const forward = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), playerYaw);
+  const pos = new THREE.Vector3(
+    Math.max(-FENCE_SIZE + 0.7, Math.min(FENCE_SIZE - 0.7, playerPos.x + forward.x * 6)),
+    0,
+    Math.max(-FENCE_SIZE + 0.7, Math.min(FENCE_SIZE - 0.7, playerPos.z + forward.z * 6))
+  );
+  if (decoyMarker) {
+    decoyMarker.position.copy(pos);
+    decoyMarker.visible = true;
+    setTimeout(() => { if (decoyMarker) decoyMarker.visible = false; }, 5000);
+  }
+  neighborStateBeforeDistract = neighborState === 'walking_to_gate' ? 'approaching' : neighborState;
+  neighborDistractPos.copy(pos);
+  neighborDistractUntil = clock.getElapsedTime() + 5;
+  neighborState = 'distracted';
+  setNeighborStanding();
+  if (bus) bus.emit(GameEvents.DISTRACT_NEIGHBOR, pos, 5);
+  playDecoySound();
+}
+
+function setupSystems() {
+  bus = new EventBus();
+
+  const boundary = {
+    minX: -FENCE_SIZE + 0.7,
+    maxX: FENCE_SIZE - 0.7,
+    minZ: -FENCE_SIZE + 0.7,
+    maxZ: FENCE_SIZE - 0.7,
+    exitPoint: new THREE.Vector3(-FENCE_SIZE - 2, 0, 0),
+  };
+
+  const neighborActor = {
+    mesh: neighbor,
+    isActive: () => ['walking_to_gate', 'approaching', 'fighting', 'distracted'].includes(neighborState),
+    staggerFromProjectile: (dir) => {
+      if (!dir) return;
+      neighbor.position.x += dir.x * 0.9;
+      neighbor.position.z += dir.z * 0.9;
+      neighborAnger = Math.max(0, neighborAnger - 15);
+      if (neighbor.userData.eyebrows) {
+        neighbor.userData.eyebrows.forEach((b, i) => { b.rotation.z = i === 0 ? -0.7 : 0.7; });
+      }
+    },
+    blind: (duration) => {
+      if (neighbor.userData.paintSplat) neighbor.userData.paintSplat.visible = true;
+      setTimeout(() => {
+        if (neighbor.userData.paintSplat) neighbor.userData.paintSplat.visible = false;
+      }, (duration || 4) * 1000);
+    },
+    getHandPos: () => new THREE.Vector3(neighbor.position.x, 0.6, neighbor.position.z),
+  };
+
+  ctx = {
+    scene,
+    camera,
+    bus,
+    clock,
+    player,
+    neighbor,
+    obstacles,
+    pickups,
+    boundary,
+    isTallGrassAt,
+    getAntagonists: () => [neighborActor],
+    isNeighborActive: () => neighborActor.isActive(),
+    getNeighborHandPos: () => neighborActor.getHandPos(),
+    getNearestWallPoint: (pos) => ({
+      point: new THREE.Vector3(
+        Math.max(houseBounds.minX, Math.min(houseBounds.maxX, pos.x)),
+        0,
+        houseBounds.maxZ + 1.2
+      ),
+      standoff: 1.2,
+    }),
+    onSabotage: () => {},
+    audio: { playHurt: playHurtSound, playCrash: playCrashSound },
+    projectiles: null,
+  };
+
+  gameState = new GameStateManager(bus);
+  projectiles = new ProjectileSystem(ctx);
+  ctx.projectiles = projectiles;
+  mowerPhysics = new MowerPhysics(ctx, mower);
+  mowerPhysics.followOffset.set(0, 0, -1.7);
+  ragdoll = new RagdollController(ctx);
+
+  bus.on(GameEvents.PHASE_CHANGED, onPhaseChanged);
+  bus.on(GameEvents.GAME_OVER, onGameOver);
+  bus.on(GameEvents.PAINT_PROGRESS, (percent) => {
+    const el = document.getElementById('paint-percent');
+    if (el) el.textContent = Math.floor(percent);
+  });
+}
+
+function onPhaseChanged(phase, prev, meta) {
+  currentPhase = phase;
+  if (phase === Phase.GAME_OVER && meta === 'victory') {
+    // Victory is already handled by checkCompletion for the paint job.
+  }
+}
+
+function onGameOver(reason) {
+  if (reason === 'victory') return;
+  player.controlsEnabled = false;
+  document.exitPointerLock();
+  neighborState = 'won';
+  const title = document.getElementById('game-over-title');
+  const text = document.getElementById('game-over-text');
+  if (title) title.textContent = '💀 GAME OVER';
+  if (text) text.textContent = reason === 'dragged'
+    ? 'Naboen slæbte dig ud af haven! Tryk R for at prøve igen.'
+    : 'Naboen slog dig ud! Tryk R for at prøve igen.';
+  const modal = document.getElementById('game-over-modal');
+  if (modal) modal.classList.remove('hidden');
+}
+
+function showLevelBanner(title, text) {
+  const banner = document.getElementById('level-banner');
+  if (!banner) return;
+  banner.querySelector('.banner-title').textContent = title;
+  banner.querySelector('.banner-text').textContent = text;
+  banner.classList.remove('hidden');
+  banner.classList.add('show');
+  setTimeout(() => {
+    banner.classList.remove('show');
+    setTimeout(() => banner.classList.add('hidden'), 600);
+  }, 3400);
+}
+
 function setupControls() {
   window.addEventListener('keydown', (e) => {
     if (e.code === 'KeyW') keys.w = true;
@@ -2731,13 +3049,14 @@ function setupControls() {
     if (e.code === 'KeyS') keys.s = true;
     if (e.code === 'KeyD') keys.d = true;
     if (e.code === 'Space') keys.space = true;
-    if (e.code === 'KeyR' && neighborState === 'won') restartGame();
-    
+    if (e.code === 'KeyE') throwDecoy();
+    if (e.code === 'KeyR' && (neighborState === 'won' || currentPhase === Phase.GAME_OVER)) restartGame();
+
     // Debug shortcut: Press 2 to skip to Level 2 (paint house)
     if (e.code === 'Digit2' && currentLevel === 1) {
       startLevel2();
     }
-    
+
     if (e.code === 'Space' && showingDialog) {
       hideDialog();
       jumpHeld = true;
@@ -2754,7 +3073,7 @@ function setupControls() {
   });
 
   window.addEventListener('mousemove', (e) => {
-    if (!isPointerLocked || showingDialog) return;
+    if (!isPointerLocked || showingDialog || player.isRagdolled) return;
     playerYaw -= e.movementX * MOUSE_SENSITIVITY;
     playerPitch -= e.movementY * MOUSE_SENSITIVITY;
     playerPitch = Math.max(-Math.PI / 4, Math.min(Math.PI / 4, playerPitch));
@@ -2825,6 +3144,16 @@ function onWindowResize() {
 }
 
 function restartGame() {
+  if (bus) bus.emit(GameEvents.RESTART);
+  player.controlsEnabled = true;
+  player.isRagdolled = false;
+  currentPhase = Phase.MOWING;
+  decoyCooldown = 0;
+  if (decoyMarker) decoyMarker.visible = false;
+  createPickups();
+  const gameOverModal = document.getElementById('game-over-modal');
+  if (gameOverModal) gameOverModal.classList.add('hidden');
+
   // Reset to level 1
   currentLevel = 1;
   
@@ -2852,7 +3181,7 @@ function restartGame() {
   playerHealth = 100;
   completed = false;
   
-  // Reset neighbor
+  if (neighbor && neighbor.userData.paintSplat) neighbor.userData.paintSplat.visible = false;
   neighborState = 'waiting';
   neighborAnger = 0;
   isPunching = false;
@@ -2898,7 +3227,11 @@ function restartGame() {
   
   // Reset HUD
   document.getElementById('grass-display').innerHTML = '🌿 Græs slået: <span id="grass-percent">0</span>%';
-  document.getElementById('controls-hint').textContent = '⌨️ WASD + Space';
+  document.getElementById('controls-hint').textContent = '⌨️ WASD + Space · E = Aflede';
+  const paintDisplay = document.getElementById('paint-display');
+  const grassDisplay = document.getElementById('grass-display');
+  if (paintDisplay) paintDisplay.classList.add('hidden');
+  if (grassDisplay) grassDisplay.classList.remove('hidden');
   document.querySelector('.modal-content h2').textContent = '🎉 Græsset er slået!';
   document.getElementById('restart-btn').textContent = '🔄 Ny dag';
   document.getElementById('restart-btn').onclick = restartGame;
@@ -2919,6 +3252,26 @@ function updateNeighbor() {
   const time = clock.getElapsedTime();
   const mowed = grassBlades.filter(b => !b.isTall).length;
   const percent = (mowed / totalGrass) * 100;
+
+  if (neighborState === 'distracted') {
+    const dir = new THREE.Vector3();
+    dir.subVectors(neighborDistractPos, neighbor.position);
+    dir.y = 0;
+    if (dir.length() > 0.4) {
+      dir.normalize();
+      neighbor.position.x += dir.x * 0.08;
+      neighbor.position.z += dir.z * 0.08;
+      neighbor.lookAt(neighborDistractPos.x, 0, neighborDistractPos.z);
+      const cycle = Math.sin(time * 10) * 0.5;
+      if (neighbor.userData.leftLeg) neighbor.userData.leftLeg.rotation.x = cycle;
+      if (neighbor.userData.rightLeg) neighbor.userData.rightLeg.rotation.x = -cycle;
+    }
+    if (time >= neighborDistractUntil) {
+      neighborState = neighborStateBeforeDistract || 'fighting';
+      if (decoyMarker) decoyMarker.visible = false;
+    }
+    return;
+  }
 
   if (neighborState === 'waiting' || neighborState === 'defeated') {
     neighbor.userData.leftArm.rotation.x = -2.35 + Math.sin(time * 1.3) * 0.04;
@@ -3034,11 +3387,10 @@ function updateNeighbor() {
       playHurtSound();
       
       if (playerHealth <= 0) {
-        showDialog('GAME OVER', 'Naboen slog dig ud! Tryk R for at prøve igen.');
-        neighborState = 'won';
         shoutNeighbor('Ha! Så blev der stille!');
         if (playerArms) playerArms.visible = false;
         if (fpMowerHandle) fpMowerHandle.visible = true;
+        if (bus) bus.emit(GameEvents.GAME_OVER, 'ko');
       }
     }
 
@@ -3103,17 +3455,26 @@ function updateNeighbor() {
 }
 
 function update() {
-  if (completed || neighborState === 'won') return;
+  if (completed || neighborState === 'won') {
+    if (ragdoll && ragdoll.isActive && ragdoll.isActive()) ragdoll.update(clock.getDelta());
+    return;
+  }
 
   const dt = clock.getDelta();
+  if (decoyCooldown > 0) decoyCooldown = Math.max(0, decoyCooldown - dt);
+
+  if (ragdoll) ragdoll.update(dt);
+  if (projectiles) projectiles.update(dt);
+
+  const canMove = player.controlsEnabled && !player.isRagdolled && !showingDialog;
   const moveDir = new THREE.Vector3();
-  
+
   if (keys.w) moveDir.z -= 1;
   if (keys.s) moveDir.z += 1;
   if (keys.a) moveDir.x -= 1;
   if (keys.d) moveDir.x += 1;
 
-  const isMoving = moveDir.length() > 0 && !showingDialog;
+  const isMoving = moveDir.length() > 0 && canMove;
   
   if (isMoving) {
     moveDir.normalize();
@@ -3131,7 +3492,7 @@ function update() {
     }
   }
 
-  if (keys.space && !jumpHeld && playerOnGround && !showingDialog) {
+  if (keys.space && !jumpHeld && playerOnGround && canMove) {
     playerVelY = JUMP_SPEED;
     playerOnGround = false;
   }
@@ -3164,21 +3525,29 @@ function update() {
     updateMowerSound(false); // Silence mower in Level 2
   }
 
-  // First-person camera
-  camera.position.copy(playerPos);
-  camera.rotation.order = 'YXZ';
-  camera.rotation.y = playerYaw;
-  camera.rotation.x = playerPitch;
+  // First-person camera (RagdollController owns it while the player is flopping)
+  if (!player.isRagdolled) {
+    camera.position.copy(playerPos);
+    camera.rotation.order = 'YXZ';
+    camera.rotation.y = playerYaw;
+    camera.rotation.x = playerPitch;
+  }
 
-  // World mower stays in front of the player (camera looks down -Z)
-  const mowerOffset = new THREE.Vector3(0, 0, -1.7);
-  mowerOffset.applyAxisAngle(new THREE.Vector3(0, 1, 0), playerYaw);
-  mower.position.set(
-    playerPos.x + mowerOffset.x,
-    0,
-    playerPos.z + mowerOffset.z
-  );
-  mower.rotation.y = playerYaw + Math.PI;
+  if (mowerPhysics && currentLevel === 1) {
+    mowerPhysics.update(dt);
+    if (!mowerPhysics.isCrashing) {
+      mower.rotation.y = playerYaw + Math.PI;
+    }
+  } else {
+    const mowerOffset = new THREE.Vector3(0, 0, -1.7);
+    mowerOffset.applyAxisAngle(new THREE.Vector3(0, 1, 0), playerYaw);
+    mower.position.set(
+      playerPos.x + mowerOffset.x,
+      0,
+      playerPos.z + mowerOffset.z
+    );
+    mower.rotation.y = playerYaw + Math.PI;
+  }
 
   if (playerModel) {
     playerModel.position.set(playerPos.x, playerFootOffset + (playerPos.y - EYE_HEIGHT), playerPos.z);
@@ -3205,6 +3574,11 @@ function update() {
   updateCat();
   updateWife();
   updateRoofBirds(clock.getElapsedTime());
+
+  if (decoyMarker && decoyMarker.visible) {
+    decoyMarker.rotation.y += dt * 3;
+    decoyMarker.position.y = 0.05 + Math.sin(clock.getElapsedTime() * 6) * 0.05;
+  }
   
   if (currentLevel === 1) {
     checkMowing();
@@ -3471,6 +3845,10 @@ function checkMowing() {
 
     if (dist < MOW_RADIUS) {
       grass.isTall = false;
+      const key = tallCellKey(grass.x, grass.z);
+      const count = (tallGrassGrid.get(key) || 1) - 1;
+      if (count <= 0) tallGrassGrid.delete(key);
+      else tallGrassGrid.set(key, count);
       
       // Use direct instance index to hide grass (no searching needed)
       const idx = grass.instanceIndex;
@@ -3495,6 +3873,9 @@ function checkMowing() {
   // Update instance matrices if needed
   if (lightUpdated) window.grassInstancedLight.instanceMatrix.needsUpdate = true;
   if (darkUpdated) window.grassInstancedDark.instanceMatrix.needsUpdate = true;
+  if ((lightUpdated || darkUpdated) && bus) {
+    bus.emit(GameEvents.MOW_PROGRESS, (grassBlades.filter((b) => !b.isTall).length / Math.max(1, totalGrass)) * 100);
+  }
 }
 
 function computePaintGoal() {
@@ -3586,6 +3967,9 @@ function applyPaintStroke() {
 
   paintedCells.add(key);
   paintProgress = paintedCells.size;
+  if (bus) {
+    bus.emit(GameEvents.PAINT_PROGRESS, (paintedCells.size / Math.max(1, totalPaintSections)) * 100);
+  }
   while (paintSplats.length > 900) {
     const old = paintSplats.shift();
     scene.remove(old);
@@ -3616,10 +4000,14 @@ function updateHUD() {
   if (currentLevel === 1) {
     const mowed = grassBlades.filter(b => !b.isTall).length;
     const percent = Math.floor((mowed / totalGrass) * 100);
-    document.getElementById('grass-percent').textContent = percent;
+    const el = document.getElementById('grass-percent');
+    if (el) el.textContent = percent;
   } else if (currentLevel === 2) {
     const percent = Math.min(100, Math.floor((paintedCells.size / Math.max(1, totalPaintSections)) * 100));
-    document.getElementById('grass-percent').textContent = percent;
+    const el = document.getElementById('paint-percent');
+    if (el) el.textContent = percent;
+    const grassEl = document.getElementById('grass-percent');
+    if (grassEl) grassEl.textContent = percent;
   }
   document.getElementById('money').textContent = money;
 }
@@ -3653,6 +4041,7 @@ function checkCompletion() {
       document.getElementById('money').textContent = money;
       document.exitPointerLock();
       playSound('success', { volume: 0.5 });
+      if (bus) bus.emit(GameEvents.LEVEL2_COMPLETE);
       
       document.getElementById('completion-modal').classList.remove('hidden');
       document.querySelector('.modal-content h2').textContent = '🎨 Huset er malet!';
@@ -3666,7 +4055,8 @@ function startLevel2() {
   currentLevel = 2;
   completed = false;
   isPainting = false;
-  
+  if (bus) bus.emit(GameEvents.LEVEL1_COMPLETE);
+
   // Hide grass (already mowed) - hide instanced meshes
   if (window.grassInstancedLight) window.grassInstancedLight.visible = false;
   if (window.grassInstancedDark) window.grassInstancedDark.visible = false;
@@ -3679,11 +4069,15 @@ function startLevel2() {
   if (mower) mower.visible = false;
   if (fpMowerHandle) fpMowerHandle.visible = false;
   createFirstPersonPaintbrush();
-  
-  document.getElementById('grass-display').innerHTML = '🎨 Malet: <span id="grass-percent">0</span>%';
-  document.getElementById('controls-hint').textContent = '🎨 Hold musen nede · Space = hop';
+
+  const grassDisplay = document.getElementById('grass-display');
+  const paintDisplay = document.getElementById('paint-display');
+  if (grassDisplay) grassDisplay.classList.add('hidden');
+  if (paintDisplay) paintDisplay.classList.remove('hidden');
+  document.getElementById('controls-hint').textContent = '🎨 Hold musen nede · E = Aflede · Space = hop';
   const crosshair = document.getElementById('paint-crosshair');
   if (crosshair) crosshair.classList.remove('hidden');
+  showLevelBanner('LEVEL 2 · MALER-FASEN', 'Mal huset! E afleder naboen. Hold musen nede for at male.');
   
   document.getElementById('completion-modal').classList.add('hidden');
   renderer.domElement.requestPointerLock();

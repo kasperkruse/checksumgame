@@ -11,13 +11,19 @@
     <div id="game-container">
       <div id="click-prompt">
         <h2>🌿 Klik for at spille</h2>
-        <p>WASD = Bevæg dig · Mus = Kig rundt · Space = Hop · Klik = Slå · Hold musen nede for at male</p>
+        <p>WASD = Bevæg dig · Mus = Kig rundt · Space = Hop · Klik = Slå · E = Aflede · Hold musen nede for at male</p>
+        <p class="prompt-sub">Slå græsset → ved 25% kommer den sure nabo! Undgå klippe-sten og hold øje med nisserne.</p>
       </div>
       <div id="paint-crosshair" class="hidden" aria-hidden="true"></div>
       <div id="hud">
         <div class="hud-item" id="money-display">💰 Penge: <span id="money">0</span> kr</div>
         <div class="hud-item" id="grass-display">🌿 Græs slået: <span id="grass-percent">0</span>%</div>
-        <div class="hud-item" id="controls-hint">⌨️ WASD + Space</div>
+        <div class="hud-item hidden" id="paint-display">🎨 Malet: <span id="paint-percent">0</span>%</div>
+        <div class="hud-item" id="controls-hint">⌨️ WASD + Space · E = Aflede</div>
+      </div>
+      <div id="level-banner" class="hidden">
+        <div class="banner-title">LEVEL 2</div>
+        <div class="banner-text"></div>
       </div>
       <div id="health-bar" class="hidden">
         <div class="health-label">❤️ DIT LIV</div>
@@ -39,12 +45,19 @@
           <div class="next-jobs">
             <h3>Næste opgaver:</h3>
             <ul>
-              <li>🎨 Male hegnet (kommer snart)</li>
+              <li>🎨 Male huset</li>
               <li>🌳 Beskære hækken (kommer snart)</li>
               <li>🚗 Vaske bilen (kommer snart)</li>
             </ul>
           </div>
           <button id="restart-btn">🔄 Ny dag</button>
+        </div>
+      </div>
+      <div id="game-over-modal" class="hidden">
+        <div class="modal-content game-over">
+          <h2 id="game-over-title">💀 GAME OVER</h2>
+          <p id="game-over-text">Naboen slog dig ud af haven! Tryk R for at prøve igen.</p>
+          <button id="restart-btn-over">🔄 Prøv igen</button>
         </div>
       </div>
     </div>
