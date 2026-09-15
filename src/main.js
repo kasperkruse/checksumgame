@@ -2037,23 +2037,25 @@ function setupControls() {
       const intersects = raycaster.intersectObjects(paintSections);
       if (intersects.length > 0) {
         const section = intersects[0].object;
-        if (!section.userData.painted && intersects[0].distance < 4) {
+        if (!section.userData.painted && intersects[0].distance < 8) { // Increased range
           section.userData.painted = true;
           section.material.color.setHex(0xFFFFF0); // White paint
           paintProgress++;
+          updateHUD();
+          checkCompletion();
           
-          // Play paint sound
+          // Play paint swoosh sound
           if (audioContext) {
             const osc = audioContext.createOscillator();
             const gain = audioContext.createGain();
             osc.type = 'sine';
-            osc.frequency.value = 200 + Math.random() * 100;
-            gain.gain.setValueAtTime(0.05, audioContext.currentTime);
-            gain.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.1);
+            osc.frequency.value = 300 + Math.random() * 200;
+            gain.gain.setValueAtTime(0.1, audioContext.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.2);
             osc.connect(gain);
             gain.connect(audioContext.destination);
             osc.start();
-            osc.stop(audioContext.currentTime + 0.1);
+            osc.stop(audioContext.currentTime + 0.2);
           }
         }
       }
@@ -2349,7 +2351,12 @@ function update() {
     }
   }
   
-  updateMowerSound(isMoving);
+  // Only play mower sound in Level 1
+  if (currentLevel === 1) {
+    updateMowerSound(isMoving);
+  } else {
+    updateMowerSound(false); // Silence mower in Level 2
+  }
 
   // First-person camera
   camera.position.copy(playerPos);
@@ -2629,33 +2636,32 @@ function checkPainting() {
 function createPaintSections() {
   paintSections = [];
   
-  // Create clickable paint sections on house walls
+  // Create clickable paint sections on house walls - bright red/orange so they're visible
   const sectionMat = new THREE.MeshLambertMaterial({ 
-    color: COLORS.houseWall,
-    transparent: true,
-    opacity: 0.9
+    color: 0xCC4444, // Red/faded color to show "needs painting"
+    side: THREE.DoubleSide // Visible from both sides
   });
   
-  const paintedMat = new THREE.MeshLambertMaterial({ color: 0xFFFFF0 }); // Fresh white paint
-  
-  // Front wall sections (visible from yard)
+  // Front wall sections (visible from yard) - positioned OUTSIDE the house walls
   const wallPositions = [
     // Front wall - left of door
-    { x: -2.5, y: 2.5, z: 4.02, w: 2, h: 2 },
-    { x: -2.5, y: 0.8, z: 4.02, w: 2, h: 1.2 },
+    { x: -2.5, y: 2.5, z: 4.05, w: 2, h: 2 },
+    { x: -2.5, y: 0.8, z: 4.05, w: 2, h: 1.2 },
     // Front wall - right of door
-    { x: 2.5, y: 2.5, z: 4.02, w: 2, h: 2 },
-    { x: 2.5, y: 0.8, z: 4.02, w: 2, h: 1.2 },
+    { x: 2.5, y: 2.5, z: 4.05, w: 2, h: 2 },
+    { x: 2.5, y: 0.8, z: 4.05, w: 2, h: 1.2 },
     // Front wall - above door
-    { x: 0, y: 3.5, z: 4.02, w: 1.5, h: 1 },
-    // Left wall sections
-    { x: -4.02, y: 2.5, z: 0, w: 2, h: 2, rotY: Math.PI / 2 },
-    { x: -4.02, y: 2.5, z: -2, w: 2, h: 2, rotY: Math.PI / 2 },
-    { x: -4.02, y: 0.8, z: 1, w: 2, h: 1.2, rotY: Math.PI / 2 },
+    { x: 0, y: 3.5, z: 4.05, w: 1.5, h: 1 },
+    // Left wall sections (facing outward from house)
+    { x: -4.05, y: 2.5, z: 0, w: 4, h: 2, rotY: Math.PI / 2 },
+    { x: -4.05, y: 0.8, z: 0, w: 4, h: 1.2, rotY: Math.PI / 2 },
     // Right wall sections
-    { x: 4.02, y: 2.5, z: 0, w: 2, h: 2, rotY: -Math.PI / 2 },
-    { x: 4.02, y: 2.5, z: -2, w: 2, h: 2, rotY: -Math.PI / 2 },
-    { x: 4.02, y: 0.8, z: 1, w: 2, h: 1.2, rotY: -Math.PI / 2 },
+    { x: 4.05, y: 2.5, z: 0, w: 4, h: 2, rotY: -Math.PI / 2 },
+    { x: 4.05, y: 0.8, z: 0, w: 4, h: 1.2, rotY: -Math.PI / 2 },
+    // Back wall sections
+    { x: -2, y: 2.5, z: -4.05, w: 2, h: 2, rotY: Math.PI },
+    { x: 2, y: 2.5, z: -4.05, w: 2, h: 2, rotY: Math.PI },
+    { x: 0, y: 0.8, z: -4.05, w: 4, h: 1.2, rotY: Math.PI },
   ];
   
   wallPositions.forEach((pos, index) => {
