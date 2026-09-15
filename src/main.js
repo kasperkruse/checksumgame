@@ -26,6 +26,11 @@ let neighborAnger = 0;
 let showingDialog = false;
 let playerHealth = 100;
 
+let audioContext = null;
+let mowerOscillator = null;
+let mowerGain = null;
+let ambientStarted = false;
+
 const keys = { w: false, a: false, s: false, d: false, space: false };
 
 const COLORS = {
@@ -96,6 +101,10 @@ function init() {
   renderer.domElement.addEventListener('click', () => {
     if (!showingDialog) {
       renderer.domElement.requestPointerLock();
+      if (!ambientStarted) {
+        initAudio();
+        ambientStarted = true;
+      }
     }
   });
 
@@ -457,6 +466,158 @@ function createNeighbor() {
   scene.add(neighbor);
 }
 
+function initAudio() {
+  audioContext = new (window.AudioContext || window.webkitAudioContext)();
+  
+  createAmbientSounds();
+  createMowerSound();
+}
+
+function createAmbientSounds() {
+  const windGain = audioContext.createGain();
+  windGain.gain.value = 0.03;
+  windGain.connect(audioContext.destination);
+
+  const windFilter = audioContext.createBiquadFilter();
+  windFilter.type = 'lowpass';
+  windFilter.frequency.value = 400;
+  windFilter.connect(windGain);
+
+  const bufferSize = 2 * audioContext.sampleRate;
+  const noiseBuffer = audioContext.createBuffer(1, bufferSize, audioContext.sampleRate);
+  const output = noiseBuffer.getChannelData(0);
+  for (let i = 0; i < bufferSize; i++) {
+    output[i] = Math.random() * 2 - 1;
+  }
+
+  const windNoise = audioContext.createBufferSource();
+  windNoise.buffer = noiseBuffer;
+  windNoise.loop = true;
+  windNoise.connect(windFilter);
+  windNoise.start();
+
+  scheduleBirdSounds();
+}
+
+function scheduleBirdSounds() {
+  if (!audioContext) return;
+  
+  const playBird = () => {
+    if (!audioContext || audioContext.state === 'closed') return;
+    
+    const osc = audioContext.createOscillator();
+    const gain = audioContext.createGain();
+    
+    const baseFreq = 1800 + Math.random() * 1200;
+    osc.frequency.value = baseFreq;
+    osc.type = 'sine';
+    
+    gain.gain.value = 0;
+    gain.gain.setValueAtTime(0, audioContext.currentTime);
+    gain.gain.linearRampToValueAtTime(0.04, audioContext.currentTime + 0.05);
+    gain.gain.linearRampToValueAtTime(0, audioContext.currentTime + 0.15);
+    
+    osc.connect(gain);
+    gain.connect(audioContext.destination);
+    
+    osc.start(audioContext.currentTime);
+    osc.stop(audioContext.currentTime + 0.2);
+
+    const numChirps = 2 + Math.floor(Math.random() * 3);
+    for (let i = 1; i < numChirps; i++) {
+      const chirpOsc = audioContext.createOscillator();
+      const chirpGain = audioContext.createGain();
+      
+      chirpOsc.frequency.value = baseFreq + (Math.random() - 0.5) * 400;
+      chirpOsc.type = 'sine';
+      
+      const startTime = audioContext.currentTime + i * 0.12;
+      chirpGain.gain.value = 0;
+      chirpGain.gain.setValueAtTime(0, startTime);
+      chirpGain.gain.linearRampToValueAtTime(0.03, startTime + 0.04);
+      chirpGain.gain.linearRampToValueAtTime(0, startTime + 0.1);
+      
+      chirpOsc.connect(chirpGain);
+      chirpGain.connect(audioContext.destination);
+      
+      chirpOsc.start(startTime);
+      chirpOsc.stop(startTime + 0.15);
+    }
+
+    setTimeout(playBird, 2000 + Math.random() * 5000);
+  };
+
+  setTimeout(playBird, 1000 + Math.random() * 2000);
+  
+  setTimeout(() => {
+    const playBird2 = () => {
+      if (!audioContext || audioContext.state === 'closed') return;
+      
+      const osc = audioContext.createOscillator();
+      const gain = audioContext.createGain();
+      
+      osc.frequency.value = 2200 + Math.random() * 800;
+      osc.type = 'sine';
+      
+      gain.gain.value = 0;
+      gain.gain.setValueAtTime(0, audioContext.currentTime);
+      gain.gain.linearRampToValueAtTime(0.025, audioContext.currentTime + 0.03);
+      gain.gain.setValueAtTime(0.025, audioContext.currentTime + 0.08);
+      gain.gain.linearRampToValueAtTime(0, audioContext.currentTime + 0.12);
+      
+      osc.connect(gain);
+      gain.connect(audioContext.destination);
+      
+      osc.start(audioContext.currentTime);
+      osc.stop(audioContext.currentTime + 0.15);
+
+      setTimeout(playBird2, 3000 + Math.random() * 6000);
+    };
+    playBird2();
+  }, 2500);
+}
+
+function createMowerSound() {
+  mowerGain = audioContext.createGain();
+  mowerGain.gain.value = 0;
+  
+  const mowerFilter = audioContext.createBiquadFilter();
+  mowerFilter.type = 'lowpass';
+  mowerFilter.frequency.value = 800;
+  mowerFilter.connect(mowerGain);
+  mowerGain.connect(audioContext.destination);
+
+  mowerOscillator = audioContext.createOscillator();
+  mowerOscillator.type = 'sawtooth';
+  mowerOscillator.frequency.value = 55;
+  mowerOscillator.connect(mowerFilter);
+  mowerOscillator.start();
+
+  const mowerOsc2 = audioContext.createOscillator();
+  mowerOsc2.type = 'square';
+  mowerOsc2.frequency.value = 28;
+  const gain2 = audioContext.createGain();
+  gain2.gain.value = 0.3;
+  mowerOsc2.connect(gain2);
+  gain2.connect(mowerFilter);
+  mowerOsc2.start();
+
+  const lfo = audioContext.createOscillator();
+  lfo.frequency.value = 8;
+  const lfoGain = audioContext.createGain();
+  lfoGain.gain.value = 3;
+  lfo.connect(lfoGain);
+  lfoGain.connect(mowerOscillator.frequency);
+  lfo.start();
+}
+
+function updateMowerSound(isMoving) {
+  if (!mowerGain) return;
+  
+  const targetVolume = isMoving ? 0.08 : 0;
+  mowerGain.gain.linearRampToValueAtTime(targetVolume, audioContext.currentTime + 0.1);
+}
+
 function createGrass() {
   grassBlades = [];
   totalGrass = 0;
@@ -464,8 +625,9 @@ function createGrass() {
   const bladeGeo = new THREE.ConeGeometry(0.06, 0.5, 4);
   const bladeMat = new THREE.MeshLambertMaterial({ color: COLORS.grassTall });
 
-  for (let x = -WORLD_SIZE / 2 + 2; x < WORLD_SIZE / 2 - 2; x += 1 / GRASS_DENSITY) {
-    for (let z = -WORLD_SIZE / 2 + 2; z < WORLD_SIZE / 2 - 2; z += 1 / GRASS_DENSITY) {
+  const fenceInner = 9.5;
+  for (let x = -fenceInner; x < fenceInner; x += 1 / GRASS_DENSITY) {
+    for (let z = -fenceInner; z < fenceInner; z += 1 / GRASS_DENSITY) {
       if (isInHouseArea(x, z) || isOnPath(x, z)) continue;
 
       const blade = new THREE.Mesh(bladeGeo, bladeMat.clone());
@@ -733,7 +895,9 @@ function update() {
   if (keys.a) moveDir.x -= 1;
   if (keys.d) moveDir.x += 1;
 
-  if (moveDir.length() > 0 && !showingDialog) {
+  const isMoving = moveDir.length() > 0 && !showingDialog;
+  
+  if (isMoving) {
     moveDir.normalize();
     moveDir.applyAxisAngle(new THREE.Vector3(0, 1, 0), playerYaw);
     
@@ -741,10 +905,12 @@ function update() {
     const newZ = playerPos.z + moveDir.z * PLAYER_SPEED;
 
     if (!isInHouseArea(newX, newZ)) {
-      playerPos.x = Math.max(-9, Math.min(9, newX));
-      playerPos.z = Math.max(-9, Math.min(9, newZ));
+      playerPos.x = Math.max(-9.3, Math.min(9.3, newX));
+      playerPos.z = Math.max(-9.3, Math.min(9.3, newZ));
     }
   }
+  
+  updateMowerSound(isMoving);
 
   camera.position.copy(playerPos);
   camera.rotation.order = 'YXZ';
