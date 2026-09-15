@@ -45,9 +45,16 @@ const GATE_POSITION = { x: -14, z: 0 };
 let dog = null;
 let dogTarget = new THREE.Vector3();
 let dogWaitTime = 0;
+let dogIsPeeing = false;
+let dogPeeTime = 0;
+let dogBarkedAtNeighbor = false;
 
-// Yard size
-const FENCE_SIZE = 14;
+// Cat
+let cat = null;
+let catMeowCooldown = 0;
+
+// Yard size (15% smaller than 14 = ~12)
+const FENCE_SIZE = 12;
 
 const keys = { w: false, a: false, s: false, d: false, space: false };
 
@@ -192,6 +199,7 @@ function init() {
   createMailbox();
   createNeighbor();
   createDog();
+  createCat();
   createFirstPersonArms();
   createFirstPersonMower();
 
@@ -844,6 +852,106 @@ function createDog() {
   scene.add(dog);
 }
 
+function createCat() {
+  cat = new THREE.Group();
+  
+  const furMat = new THREE.MeshLambertMaterial({ color: 0x808080 }); // Gray cat
+  const darkMat = new THREE.MeshLambertMaterial({ color: 0x505050 });
+  const whiteMat = new THREE.MeshLambertMaterial({ color: 0xFFFFFF });
+  const noseMat = new THREE.MeshLambertMaterial({ color: 0xFFB6C1 }); // Pink nose
+  const eyeMat = new THREE.MeshLambertMaterial({ color: 0x90EE90 }); // Green eyes
+  const pupilMat = new THREE.MeshLambertMaterial({ color: 0x000000 });
+  
+  // Body (lying down)
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.14, 0.4, 8), furMat);
+  body.rotation.z = Math.PI / 2;
+  body.position.set(0, 0.12, 0);
+  body.castShadow = true;
+  cat.add(body);
+  
+  // Head
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.1, 8, 6), furMat);
+  head.position.set(0.22, 0.18, 0);
+  head.scale.set(1.1, 1, 0.9);
+  head.castShadow = true;
+  cat.add(head);
+  
+  // Ears
+  [-0.06, 0.06].forEach(z => {
+    const ear = new THREE.Mesh(new THREE.ConeGeometry(0.04, 0.08, 4), furMat);
+    ear.position.set(0.2, 0.28, z);
+    ear.rotation.x = z > 0 ? 0.2 : -0.2;
+    cat.add(ear);
+    
+    const earInner = new THREE.Mesh(new THREE.ConeGeometry(0.02, 0.05, 4), noseMat);
+    earInner.position.set(0.2, 0.27, z);
+    earInner.rotation.x = z > 0 ? 0.2 : -0.2;
+    cat.add(earInner);
+  });
+  
+  // Eyes
+  [-0.04, 0.04].forEach(z => {
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.025, 6, 4), eyeMat);
+    eye.position.set(0.3, 0.2, z);
+    eye.scale.set(0.6, 1, 0.8);
+    cat.add(eye);
+    
+    const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.012, 4, 3), pupilMat);
+    pupil.position.set(0.31, 0.2, z);
+    pupil.scale.set(0.5, 1, 0.8);
+    cat.add(pupil);
+  });
+  
+  // Nose
+  const nose = new THREE.Mesh(new THREE.SphereGeometry(0.015, 4, 3), noseMat);
+  nose.position.set(0.32, 0.15, 0);
+  cat.add(nose);
+  
+  // Whiskers (simplified as small lines)
+  const whiskerMat = new THREE.MeshBasicMaterial({ color: 0xCCCCCC });
+  [-0.03, 0, 0.03].forEach(y => {
+    [-1, 1].forEach(side => {
+      const whisker = new THREE.Mesh(new THREE.CylinderGeometry(0.002, 0.002, 0.08, 4), whiskerMat);
+      whisker.rotation.z = Math.PI / 2;
+      whisker.rotation.y = side * 0.3;
+      whisker.position.set(0.32, 0.14 + y * 0.02, side * 0.06);
+      cat.add(whisker);
+    });
+  });
+  
+  // Front paws (tucked under)
+  [-0.08, 0.08].forEach(z => {
+    const paw = new THREE.Mesh(new THREE.SphereGeometry(0.04, 6, 4), furMat);
+    paw.position.set(0.15, 0.04, z);
+    paw.scale.set(1, 0.6, 0.8);
+    cat.add(paw);
+  });
+  
+  // Back paws
+  [-0.1, 0.1].forEach(z => {
+    const paw = new THREE.Mesh(new THREE.SphereGeometry(0.04, 6, 4), furMat);
+    paw.position.set(-0.15, 0.04, z);
+    paw.scale.set(1, 0.6, 0.8);
+    cat.add(paw);
+  });
+  
+  // Tail (curled around body)
+  const tail = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.03, 0.25, 6), darkMat);
+  tail.rotation.z = Math.PI / 2;
+  tail.position.set(-0.25, 0.1, 0.12);
+  cat.add(tail);
+  
+  const tailTip = new THREE.Mesh(new THREE.SphereGeometry(0.025, 6, 4), darkMat);
+  tailTip.position.set(-0.35, 0.1, 0.15);
+  cat.add(tailTip);
+  
+  // Position cat in front of house (lying on the path/steps area)
+  cat.position.set(2, 0, 4.5);
+  cat.rotation.y = Math.PI / 4; // Facing slightly toward the yard
+  
+  scene.add(cat);
+}
+
 function createTrees() {
   const createTree = (x, z, scale = 1) => {
     const tree = new THREE.Group();
@@ -1089,84 +1197,103 @@ function createFirstPersonMower() {
   const mowerRedMat = new THREE.MeshLambertMaterial({ color: COLORS.mower });
   const mowerBlackMat = new THREE.MeshLambertMaterial({ color: 0x1a1a1a });
   
-  // Mower body visible at bottom of screen
-  const mowerBody = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.2, 0.4), mowerRedMat);
-  mowerBody.position.set(0, -0.55, -0.6);
+  // Mower body visible at bottom of screen - MORE VISIBLE
+  const mowerBody = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.25, 0.5), mowerRedMat);
+  mowerBody.position.set(0, -0.45, -0.55);
   fpMowerHandle.add(mowerBody);
   
+  // Mower top detail
+  const mowerTop = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.12, 0.35), mowerRedMat);
+  mowerTop.position.set(0, -0.32, -0.55);
+  fpMowerHandle.add(mowerTop);
+  
+  // Engine on top
+  const engine = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.1, 8), mowerBlackMat);
+  engine.position.set(0, -0.24, -0.6);
+  fpMowerHandle.add(engine);
+  
   // Mower deck
-  const mowerDeck = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.08, 0.5), mowerBlackMat);
-  mowerDeck.position.set(0, -0.62, -0.6);
+  const mowerDeck = new THREE.Mesh(new THREE.BoxGeometry(0.65, 0.08, 0.55), mowerBlackMat);
+  mowerDeck.position.set(0, -0.54, -0.55);
   fpMowerHandle.add(mowerDeck);
   
-  // Left handle bar
-  const leftHandle = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.7, 8), handleMat);
-  leftHandle.rotation.x = 0.5;
-  leftHandle.position.set(-0.2, -0.35, -0.45);
+  // Wheels visible
+  const wheelMat = new THREE.MeshLambertMaterial({ color: 0x222222 });
+  [[-0.28, -0.28], [0.28, -0.28]].forEach(([x, z]) => {
+    const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.04, 12), wheelMat);
+    wheel.rotation.z = Math.PI / 2;
+    wheel.position.set(x, -0.52, z - 0.55);
+    fpMowerHandle.add(wheel);
+  });
+  
+  // Left handle bar - more visible
+  const leftHandle = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, 0.6, 8), handleMat);
+  leftHandle.rotation.x = 0.45;
+  leftHandle.position.set(-0.22, -0.28, -0.38);
   fpMowerHandle.add(leftHandle);
   
   // Right handle bar  
-  const rightHandle = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.7, 8), handleMat);
-  rightHandle.rotation.x = 0.5;
-  rightHandle.position.set(0.2, -0.35, -0.45);
+  const rightHandle = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, 0.6, 8), handleMat);
+  rightHandle.rotation.x = 0.45;
+  rightHandle.position.set(0.22, -0.28, -0.38);
   fpMowerHandle.add(rightHandle);
   
   // Cross grip bar
-  const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.48, 8), gripMat);
+  const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.52, 8), gripMat);
   grip.rotation.z = Math.PI / 2;
-  grip.position.set(0, -0.12, -0.18);
+  grip.position.set(0, -0.08, -0.15);
   fpMowerHandle.add(grip);
   
-  // Left arm and hand on grip
+  // Left arm and hand on grip - bigger and more visible
   const leftArm = new THREE.Group();
   // Forearm
-  const leftForearm = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.05, 0.22, 8), skinMat);
-  leftForearm.rotation.z = Math.PI / 2 + 0.4;
-  leftForearm.rotation.x = 0.2;
-  leftForearm.position.set(-0.08, 0.02, 0);
+  const leftForearm = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.055, 0.25, 8), skinMat);
+  leftForearm.rotation.z = Math.PI / 2 + 0.35;
+  leftForearm.rotation.x = 0.15;
+  leftForearm.position.set(-0.1, 0.04, 0);
   leftArm.add(leftForearm);
   // Sleeve
-  const leftSleeve = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.065, 0.18, 8), shirtMat);
-  leftSleeve.rotation.z = Math.PI / 2 + 0.5;
-  leftSleeve.position.set(-0.2, 0.08, 0.02);
+  const leftSleeve = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.075, 0.2, 8), shirtMat);
+  leftSleeve.rotation.z = Math.PI / 2 + 0.45;
+  leftSleeve.position.set(-0.22, 0.1, 0.02);
   leftArm.add(leftSleeve);
   // Plaid stripe
-  const leftStripe = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.015, 0.07), shirtDarkMat);
-  leftStripe.position.set(-0.2, 0.08, 0.06);
-  leftStripe.rotation.z = 0.5;
+  const leftStripe = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.018, 0.08), shirtDarkMat);
+  leftStripe.position.set(-0.22, 0.1, 0.07);
+  leftStripe.rotation.z = 0.45;
   leftArm.add(leftStripe);
   // Hand
-  const leftHand = new THREE.Mesh(new THREE.SphereGeometry(0.045, 8, 6), skinMat);
+  const leftHand = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 6), skinMat);
   leftHand.scale.set(1.2, 0.7, 0.9);
   leftHand.position.set(0.02, -0.02, 0);
   leftArm.add(leftHand);
-  leftArm.position.set(-0.15, -0.1, -0.18);
+  leftArm.position.set(-0.18, -0.06, -0.15);
   fpMowerHandle.add(leftArm);
   
   // Right arm and hand on grip
   const rightArm = new THREE.Group();
   // Forearm
-  const rightForearm = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.05, 0.22, 8), skinMat);
-  rightForearm.rotation.z = -Math.PI / 2 - 0.4;
-  rightForearm.rotation.x = 0.2;
-  rightForearm.position.set(0.08, 0.02, 0);
+  const rightForearm = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.055, 0.25, 8), skinMat);
+  rightForearm.rotation.z = -Math.PI / 2 - 0.35;
+  rightForearm.rotation.x = 0.15;
+  rightForearm.position.set(0.1, 0.04, 0);
   rightArm.add(rightForearm);
   // Sleeve
-  const rightSleeve = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.065, 0.18, 8), shirtMat);
-  rightSleeve.rotation.z = -Math.PI / 2 - 0.5;
-  rightSleeve.position.set(0.2, 0.08, 0.02);
+  const rightSleeve = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.075, 0.2, 8), shirtMat);
+  rightSleeve.rotation.z = -Math.PI / 2 - 0.45;
+  rightSleeve.position.set(0.22, 0.1, 0.02);
   rightArm.add(rightSleeve);
   // Plaid stripe
-  const rightStripe = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.015, 0.07), shirtDarkMat);
-  rightStripe.position.set(0.2, 0.08, 0.06);
-  rightStripe.rotation.z = -0.5;
+  const rightStripe = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.018, 0.08), shirtDarkMat);
+  rightStripe.position.set(0.22, 0.1, 0.07);
+  rightStripe.rotation.z = -0.45;
   rightArm.add(rightStripe);
   // Hand
-  const rightHand = new THREE.Mesh(new THREE.SphereGeometry(0.045, 8, 6), skinMat);
+  const rightHand = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 6), skinMat);
   rightHand.scale.set(1.2, 0.7, 0.9);
   rightHand.position.set(-0.02, -0.02, 0);
   rightArm.add(rightHand);
-  rightArm.position.set(0.15, -0.1, -0.18);
+  rightArm.position.set(0.18, -0.06, -0.15);
   fpMowerHandle.add(rightArm);
   
   // Mower visible in first person is shown by default
@@ -1580,6 +1707,60 @@ function playHurtSound() {
   osc.stop(audioContext.currentTime + 0.2);
 }
 
+function playDogBark() {
+  if (!audioContext) return;
+  
+  // Two-tone bark
+  for (let i = 0; i < 2; i++) {
+    const osc = audioContext.createOscillator();
+    const gain = audioContext.createGain();
+    
+    osc.type = 'sawtooth';
+    const startTime = audioContext.currentTime + i * 0.25;
+    osc.frequency.setValueAtTime(250 + i * 50, startTime);
+    osc.frequency.exponentialRampToValueAtTime(150, startTime + 0.15);
+    
+    gain.gain.setValueAtTime(0, startTime);
+    gain.gain.linearRampToValueAtTime(0.15, startTime + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.01, startTime + 0.15);
+    
+    osc.connect(gain);
+    gain.connect(audioContext.destination);
+    
+    osc.start(startTime);
+    osc.stop(startTime + 0.2);
+  }
+}
+
+function playCatMeow() {
+  if (!audioContext) return;
+  
+  const osc = audioContext.createOscillator();
+  const gain = audioContext.createGain();
+  const filter = audioContext.createBiquadFilter();
+  
+  filter.type = 'bandpass';
+  filter.frequency.value = 800;
+  filter.Q.value = 2;
+  
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(500, audioContext.currentTime);
+  osc.frequency.linearRampToValueAtTime(700, audioContext.currentTime + 0.15);
+  osc.frequency.linearRampToValueAtTime(400, audioContext.currentTime + 0.4);
+  
+  gain.gain.setValueAtTime(0, audioContext.currentTime);
+  gain.gain.linearRampToValueAtTime(0.12, audioContext.currentTime + 0.05);
+  gain.gain.linearRampToValueAtTime(0.08, audioContext.currentTime + 0.2);
+  gain.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.5);
+  
+  osc.connect(filter);
+  filter.connect(gain);
+  gain.connect(audioContext.destination);
+  
+  osc.start(audioContext.currentTime);
+  osc.stop(audioContext.currentTime + 0.5);
+}
+
 function setupControls() {
   window.addEventListener('keydown', (e) => {
     if (e.code === 'KeyW') keys.w = true;
@@ -1678,7 +1859,13 @@ function restartGame() {
     dog.position.set(5, 0, 8);
     dogTarget.set(5, 0, 8);
     dogWaitTime = 0;
+    dogIsPeeing = false;
+    dogPeeTime = 0;
+    dogBarkedAtNeighbor = false;
+    dog.userData.backRight.rotation.z = 0;
   }
+  // Reset cat
+  catMeowCooldown = 0;
   // Reset gate
   if (gardenGate) {
     gardenGate.rotation.y = Math.PI / 2;
@@ -1710,10 +1897,22 @@ function updateNeighbor() {
     }, 2500);
     document.getElementById('health-bar').classList.remove('hidden');
     neighborAnger = 100;
+    dogBarkedAtNeighbor = false;
     
     // Open the gate animation
     if (gardenGate) {
       gardenGate.rotation.y = Math.PI / 2 - 0.8; // Gate swings open
+    }
+  }
+  
+  // Dog barks when neighbor enters the yard
+  if ((neighborState === 'walking_to_gate' || neighborState === 'approaching') && !dogBarkedAtNeighbor) {
+    if (neighbor.position.x > -FENCE_SIZE - 1) {
+      playDogBark();
+      dogBarkedAtNeighbor = true;
+      // Dog runs to bark at neighbor
+      dogTarget.set(-FENCE_SIZE + 3, 0, 2);
+      dogWaitTime = 0;
     }
   }
 
@@ -1900,6 +2099,7 @@ function update() {
 
   updateNeighbor();
   updateDog();
+  updateCat();
   checkMowing();
   updateHUD();
   checkCompletion();
@@ -1909,6 +2109,48 @@ function updateDog() {
   if (!dog) return;
   
   const time = clock.getElapsedTime();
+  
+  // Check if player is too close - run away!
+  const distToPlayer = dog.position.distanceTo(playerPos);
+  if (distToPlayer < 3 && !dogIsPeeing) {
+    // Run away from player
+    const awayDir = new THREE.Vector3();
+    awayDir.subVectors(dog.position, playerPos);
+    awayDir.y = 0;
+    awayDir.normalize();
+    
+    // Set new target away from player
+    let newX = dog.position.x + awayDir.x * 5;
+    let newZ = dog.position.z + awayDir.z * 5;
+    
+    // Clamp to yard bounds
+    newX = Math.max(-FENCE_SIZE + 1, Math.min(FENCE_SIZE - 1, newX));
+    newZ = Math.max(-FENCE_SIZE + 1, Math.min(FENCE_SIZE - 1, newZ));
+    
+    // Avoid house
+    if (isInHouseArea(newX, newZ)) {
+      newX = dog.position.x - awayDir.x * 3;
+      newZ = dog.position.z - awayDir.z * 3;
+    }
+    
+    dogTarget.set(newX, 0, newZ);
+    dogWaitTime = 0;
+  }
+  
+  // Peeing animation
+  if (dogIsPeeing) {
+    dogPeeTime -= 0.016;
+    // Lift leg pose
+    dog.userData.backRight.rotation.z = 0.8;
+    dog.userData.tail.rotation.z = -0.3;
+    
+    if (dogPeeTime <= 0) {
+      dogIsPeeing = false;
+      dog.userData.backRight.rotation.z = 0;
+      dogWaitTime = 1 + Math.random() * 2;
+    }
+    return;
+  }
   
   // Dog AI - wander around happily
   if (dogWaitTime > 0) {
@@ -1927,8 +2169,8 @@ function updateDog() {
   
   if (dir.length() > 0.3) {
     dir.normalize();
-    dog.position.x += dir.x * 0.03;
-    dog.position.z += dir.z * 0.03;
+    dog.position.x += dir.x * 0.04;
+    dog.position.z += dir.z * 0.04;
     dog.lookAt(dogTarget.x, dog.position.y, dogTarget.z);
     
     // Walking animation
@@ -1941,8 +2183,32 @@ function updateDog() {
     // Tail wag while walking
     dog.userData.tail.rotation.z = -0.5 + Math.sin(time * 12) * 0.3;
   } else {
-    // Reached target, pick new random target and wait
-    dogWaitTime = 2 + Math.random() * 4;
+    // Reached target - maybe pee on flowers?
+    // Check if near flower beds
+    const flowerBedPositions = [
+      [-3.5, -4], [3.5, -4], [-8, 10], [8, 10], [-10, -8], [10, -8]
+    ];
+    
+    let nearFlowers = false;
+    for (const [fx, fz] of flowerBedPositions) {
+      const distToFlower = Math.sqrt(
+        Math.pow(dog.position.x - fx, 2) + Math.pow(dog.position.z - fz, 2)
+      );
+      if (distToFlower < 2) {
+        nearFlowers = true;
+        break;
+      }
+    }
+    
+    // 30% chance to pee if near flowers
+    if (nearFlowers && Math.random() < 0.3) {
+      dogIsPeeing = true;
+      dogPeeTime = 2 + Math.random();
+      return;
+    }
+    
+    // Pick new random target and wait
+    dogWaitTime = 2 + Math.random() * 3;
     
     // Pick new target within yard bounds (avoid house)
     let newX, newZ;
@@ -1952,6 +2218,21 @@ function updateDog() {
     } while (isInHouseArea(newX, newZ) || isOnDeck(newX, newZ));
     
     dogTarget.set(newX, 0, newZ);
+  }
+}
+
+function updateCat() {
+  if (!cat) return;
+  
+  // Cat just lies there, but meows if player comes close
+  if (catMeowCooldown > 0) {
+    catMeowCooldown -= 0.016;
+  }
+  
+  const distToPlayer = cat.position.distanceTo(playerPos);
+  if (distToPlayer < 2.5 && catMeowCooldown <= 0 && audioContext) {
+    playCatMeow();
+    catMeowCooldown = 3 + Math.random() * 3; // Don't meow too often
   }
 }
 
