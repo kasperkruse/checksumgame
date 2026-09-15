@@ -1,11 +1,19 @@
 import * as THREE from 'three';
+import { EventBus, GameEvents } from './systems/EventBus.js';
+import { GameStateManager, Phase } from './systems/GameStateManager.js';
+import { NeighborAI } from './systems/NeighborAI.js';
+import { MowerPhysics } from './systems/MowerPhysics.js';
+import { ProjectileSystem } from './systems/ProjectileSystem.js';
+import { RagdollController } from './systems/RagdollController.js';
+import { PaintingSystem } from './systems/PaintingSystem.js';
 
 const WORLD_SIZE = 30;
 const GRASS_DENSITY = 6;
-const PLAYER_SPEED = 0.1;
+const PLAYER_SPEED = 6.0;      // units/second (dt-based movement)
 const MOUSE_SENSITIVITY = 0.002;
 const MOW_RADIUS = 1.0;
 const MOW_REWARD = 100;
+const YARD = { minX: -9.3, maxX: 9.3, minZ: -9.3, maxZ: 9.3 };
 
 let scene, camera, renderer;
 let mower;
@@ -15,27 +23,56 @@ let money = 0;
 let completed = false;
 let clock = new THREE.Clock();
 
+// Simulation time accumulated from per-frame dt. We drive everything from a
+// single dt so movement and physics are frame-rate independent. `timeProvider`
+// exposes getElapsedTime() so the systems can share the same clock for animation.
+let simTime = 0;
+const timeProvider = { getElapsedTime: () => simTime };
+
 let playerPos = new THREE.Vector3(-6, 1.5, 6);
 let playerYaw = 0;
 let playerPitch = 0;
 let isPointerLocked = false;
 
 let neighbor = null;
-let neighborState = 'waiting';
-let neighborAnger = 0;
 let showingDialog = false;
-let playerHealth = 100;
+
+// ---------------------------------------------------------------------------
+// Modular gameplay systems (see src/systems/*). main.js owns the world + render
+// loop and simply wires these together through a shared EventBus + context.
+// ---------------------------------------------------------------------------
+let bus, gameState, neighborAI, mowerPhysics, projectiles, ragdoll, painting, ctx;
+let currentPhase = Phase.MOWING;
+
+// Player facade shared with every system.
+const player = {
+  pos: playerPos,
+  getYaw: () => playerYaw,
+  getPitch: () => playerPitch,
+  controlsEnabled: true,
+  isRagdolled: false,
+};
+
+// Physics props the mower can smash into (rocks/gnomes) and small props it can
+// launch as projectiles (apples/toys/pebbles).
+let obstacles = [];
+let pickups = [];
+let decoyMarker = null;
+
+// Coarse occupancy grid of remaining TALL grass, used to slow the neighbor 40%
+// when he wades through unmowed areas. Keyed "cx,cz"; value = tall blade count.
+const TALL_CELL = 1.5;
+let tallGrassGrid = new Map();
 
 let audioContext = null;
 let mowerOscillator = null;
 let mowerGain = null;
 let ambientStarted = false;
 
-// First-person arms and mower handle
+// First-person view props (mower handle in Level 1, paint tool in Level 2).
 let playerArms = null;
 let fpMowerHandle = null;
-let isPunching = false;
-let punchTime = 0;
+let fpPaintTool = null;
 
 // Garden gate
 let gardenGate = null;
@@ -183,20 +220,31 @@ function init() {
   createFlowerBeds();
   createMailbox();
   createNeighbor();
+  createObstacles();
+  createPickups();
+  createDecoyMarker();
   createFirstPersonArms();
   createFirstPersonMower();
+  createFirstPersonPaintTool();
 
+  setupSystems();
   setupControls();
   window.addEventListener('resize', onWindowResize);
   document.getElementById('restart-btn').addEventListener('click', restartGame);
 
   renderer.domElement.addEventListener('click', () => {
-    if (!showingDialog) {
+    if (showingDialog) return;
+    if (!isPointerLocked) {
       renderer.domElement.requestPointerLock();
       if (!ambientStarted) {
         initAudio();
         ambientStarted = true;
       }
+      return;
+    }
+    // While playing: a click in Level 2 fires the paint tool.
+    if (currentPhase === Phase.PAINTING && player.controlsEnabled && painting) {
+      painting.fire();
     }
   });
 
@@ -1023,9 +1071,54 @@ function createFirstPersonMower() {
   camera.add(fpMowerHandle);
 }
 
+// First-person paint sprayer, equipped during Level 2.
+function createFirstPersonPaintTool() {
+  fpPaintTool = new THREE.Group();
+
+  const bodyMat = new THREE.MeshLambertMaterial({ color: 0x2b6cb0 });
+  const metalMat = new THREE.MeshLambertMaterial({ color: 0x888888 });
+  const skinMat = new THREE.MeshLambertMaterial({ color: 0xDEB887 });
+
+  // Spray-can body.
+  const can = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.22, 12), bodyMat);
+  can.rotation.x = Math.PI / 2 + 0.5;
+  can.position.set(0.22, -0.24, -0.4);
+  fpPaintTool.add(can);
+
+  // Nozzle.
+  const nozzle = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.12, 8), metalMat);
+  nozzle.rotation.x = Math.PI / 2 + 0.5;
+  nozzle.position.set(0.22, -0.16, -0.52);
+  fpPaintTool.add(nozzle);
+
+  // Hand gripping it.
+  const hand = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 6), skinMat);
+  hand.scale.set(1.2, 0.7, 0.9);
+  hand.position.set(0.22, -0.3, -0.34);
+  fpPaintTool.add(hand);
+
+  fpPaintTool.visible = false;
+  camera.add(fpPaintTool);
+}
+
+// Toggle first-person tool between mower handle (Level 1) and paint sprayer (Level 2).
+function setPaintToolEquipped(on) {
+  if (fpPaintTool) fpPaintTool.visible = on;
+  if (fpMowerHandle) fpMowerHandle.visible = !on;
+}
+
+function tallCellKey(x, z) {
+  return `${Math.floor(x / TALL_CELL)},${Math.floor(z / TALL_CELL)}`;
+}
+
+function isTallGrassAt(x, z) {
+  return (tallGrassGrid.get(tallCellKey(x, z)) || 0) > 0;
+}
+
 function createGrass() {
   grassBlades = [];
   totalGrass = 0;
+  tallGrassGrid = new Map();
 
   const fenceInner = 9.5;
   for (let x = -fenceInner; x < fenceInner; x += 1 / GRASS_DENSITY) {
@@ -1057,6 +1150,10 @@ function createGrass() {
       grassBlades.push(blade);
       scene.add(blade);
       totalGrass++;
+
+      // Register this tall blade in the slowdown grid.
+      const key = tallCellKey(blade.position.x, blade.position.z);
+      tallGrassGrid.set(key, (tallGrassGrid.get(key) || 0) + 1);
     }
   }
 }
@@ -1253,9 +1350,108 @@ function createNeighbor() {
   neighbor.add(rightLeg);
   neighbor.userData.rightLeg = rightLeg;
 
+  // Paint splatter over the face, shown only while BLINDED in Level 2.
+  const paintSplat = new THREE.Group();
+  const splatMat = new THREE.MeshLambertMaterial({ color: 0x3aa0ff });
+  for (let i = 0; i < 5; i++) {
+    const blob = new THREE.Mesh(new THREE.SphereGeometry(0.08 + Math.random() * 0.05, 8, 6), splatMat);
+    blob.position.set((Math.random() - 0.5) * 0.3, 1.55 + (Math.random() - 0.5) * 0.2, 0.24);
+    blob.scale.z = 0.4;
+    paintSplat.add(blob);
+  }
+  paintSplat.visible = false;
+  neighbor.add(paintSplat);
+  neighbor.userData.paintSplat = paintSplat;
+
   neighbor.position.set(-18, 0, 0);
   neighbor.visible = false;
   scene.add(neighbor);
+}
+
+// Solid props the mower crashes into (explosive knockback + player ragdoll).
+function createObstacles() {
+  obstacles = [];
+  const rockMat = new THREE.MeshLambertMaterial({ color: 0x8a8a8a });
+  const rockPositions = [
+    { x: -6, z: -2, r: 0.5 }, { x: 3, z: 4, r: 0.55 }, { x: -3, z: 6, r: 0.45 },
+    { x: 6, z: 5, r: 0.5 }, { x: -7, z: 3, r: 0.5 },
+  ];
+  rockPositions.forEach(({ x, z, r }) => {
+    const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(r, 0), rockMat);
+    rock.position.set(x, r * 0.7, z);
+    rock.rotation.set(Math.random(), Math.random(), Math.random());
+    rock.castShadow = true;
+    scene.add(rock);
+    obstacles.push({ position: new THREE.Vector3(x, 0, z), radius: r + 0.1, mesh: rock });
+  });
+
+  // Garden gnomes - the classic lawnmower nemesis.
+  const gnomePositions = [{ x: 0, z: 5 }, { x: -5, z: -4 }, { x: 5, z: -3 }];
+  gnomePositions.forEach(({ x, z }) => {
+    const gnome = createGnome();
+    gnome.position.set(x, 0, z);
+    scene.add(gnome);
+    obstacles.push({ position: new THREE.Vector3(x, 0, z), radius: 0.5, mesh: gnome });
+  });
+}
+
+function createGnome() {
+  const gnome = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.ConeGeometry(0.22, 0.5, 8), new THREE.MeshLambertMaterial({ color: 0x2e7d32 }));
+  body.position.y = 0.35; body.castShadow = true; gnome.add(body);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.15, 10, 8), new THREE.MeshLambertMaterial({ color: 0xE8B98F }));
+  head.position.y = 0.62; gnome.add(head);
+  const hat = new THREE.Mesh(new THREE.ConeGeometry(0.17, 0.35, 8), new THREE.MeshLambertMaterial({ color: 0xCC2222 }));
+  hat.position.y = 0.85; gnome.add(hat);
+  const beard = new THREE.Mesh(new THREE.ConeGeometry(0.13, 0.25, 8), new THREE.MeshLambertMaterial({ color: 0xf5f5f5 }));
+  beard.position.set(0, 0.5, 0.1); beard.rotation.x = Math.PI; gnome.add(beard);
+  return gnome;
+}
+
+// Small props the mower launches as projectiles when it runs them over.
+function createPickups() {
+  pickups.forEach((p) => { if (p.mesh) scene.remove(p.mesh); });
+  pickups = [];
+  const defs = [
+    { x: -4, z: 2, color: 0xff3b30 },   // red apple
+    { x: 2, z: -1, color: 0xffcc00 },   // yellow toy
+    { x: -2, z: -3, color: 0x34c759 },  // green ball
+    { x: 5, z: 2, color: 0xff9500 },    // orange
+    { x: -6, z: 6, color: 0xaf52de },   // toy
+    { x: 4, z: 7, color: 0xff3b30 },
+    { x: 0, z: 3, color: 0xffcc00 },
+    { x: -1, z: 8, color: 0x34c759 },
+  ];
+  defs.forEach(({ x, z, color }) => {
+    const mesh = new THREE.Mesh(
+      new THREE.SphereGeometry(0.18, 10, 8),
+      new THREE.MeshLambertMaterial({ color })
+    );
+    mesh.position.set(x, 0.18, z);
+    mesh.castShadow = true;
+    scene.add(mesh);
+    pickups.push({ mesh, position: mesh.position, radius: 0.25, alive: true, color });
+  });
+}
+
+// A visible marker for the DistractNeighbor lure (a noisy decoy the player throws).
+function createDecoyMarker() {
+  decoyMarker = new THREE.Group();
+  const ring = new THREE.Mesh(
+    new THREE.TorusGeometry(0.4, 0.06, 8, 20),
+    new THREE.MeshBasicMaterial({ color: 0xffee33 })
+  );
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.y = 0.1;
+  decoyMarker.add(ring);
+  const beacon = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.05, 0.05, 1.2, 6),
+    new THREE.MeshBasicMaterial({ color: 0xffee33 })
+  );
+  beacon.position.y = 0.6;
+  decoyMarker.add(beacon);
+  decoyMarker.visible = false;
+  scene.add(decoyMarker);
 }
 
 function initAudio() {
@@ -1426,6 +1622,50 @@ function playHurtSound() {
   osc.stop(audioContext.currentTime + 0.2);
 }
 
+// Big metallic clang + rumble for the mower smashing into an obstacle.
+function playCrashSound() {
+  if (!audioContext) return;
+  const now = audioContext.currentTime;
+
+  const osc = audioContext.createOscillator();
+  const gain = audioContext.createGain();
+  osc.type = 'square';
+  osc.frequency.setValueAtTime(220, now);
+  osc.frequency.exponentialRampToValueAtTime(50, now + 0.25);
+  gain.gain.setValueAtTime(0.25, now);
+  gain.gain.exponentialRampToValueAtTime(0.01, now + 0.3);
+  osc.connect(gain); gain.connect(audioContext.destination);
+  osc.start(now); osc.stop(now + 0.3);
+
+  const noiseGain = audioContext.createGain();
+  noiseGain.gain.setValueAtTime(0.2, now);
+  noiseGain.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
+  const bufferSize = audioContext.sampleRate * 0.25;
+  const buf = audioContext.createBuffer(1, bufferSize, audioContext.sampleRate);
+  const out = buf.getChannelData(0);
+  for (let i = 0; i < bufferSize; i++) out[i] = (Math.random() * 2 - 1) * (1 - i / bufferSize);
+  const noise = audioContext.createBufferSource();
+  noise.buffer = buf;
+  noise.connect(noiseGain); noiseGain.connect(audioContext.destination);
+  noise.start(now);
+}
+
+// Chirpy attention-grabbing beep for the thrown decoy.
+function playDecoySound() {
+  if (!audioContext) return;
+  const now = audioContext.currentTime;
+  const osc = audioContext.createOscillator();
+  const gain = audioContext.createGain();
+  osc.type = 'triangle';
+  osc.frequency.setValueAtTime(880, now);
+  osc.frequency.setValueAtTime(1320, now + 0.1);
+  osc.frequency.setValueAtTime(880, now + 0.2);
+  gain.gain.setValueAtTime(0.12, now);
+  gain.gain.exponentialRampToValueAtTime(0.01, now + 0.3);
+  osc.connect(gain); gain.connect(audioContext.destination);
+  osc.start(now); osc.stop(now + 0.3);
+}
+
 function setupControls() {
   window.addEventListener('keydown', (e) => {
     if (e.code === 'KeyW') keys.w = true;
@@ -1433,12 +1673,14 @@ function setupControls() {
     if (e.code === 'KeyS') keys.s = true;
     if (e.code === 'KeyD') keys.d = true;
     if (e.code === 'Space') keys.space = true;
-    if (e.code === 'KeyR' && neighborState === 'won') restartGame();
-    
-    if (e.code === 'Space' && showingDialog) {
-      hideDialog();
-      if (neighborState === 'approaching') neighborState = 'fighting';
-    }
+
+    // Throw a noisy decoy to lure the neighbor away (DistractNeighbor).
+    if (e.code === 'KeyE') throwDecoy();
+
+    // Restart after a game over or victory.
+    if (e.code === 'KeyR' && currentPhase === Phase.GAME_OVER) restartGame();
+
+    if (e.code === 'Space' && showingDialog) hideDialog();
   });
 
   window.addEventListener('keyup', (e) => {
@@ -1450,39 +1692,35 @@ function setupControls() {
   });
 
   window.addEventListener('mousemove', (e) => {
-    if (!isPointerLocked || showingDialog) return;
+    // The RagdollController owns the camera while the player is a limp sack.
+    if (!isPointerLocked || showingDialog || player.isRagdolled) return;
     playerYaw -= e.movementX * MOUSE_SENSITIVITY;
     playerPitch -= e.movementY * MOUSE_SENSITIVITY;
     playerPitch = Math.max(-Math.PI / 4, Math.min(Math.PI / 4, playerPitch));
   });
+}
 
-  window.addEventListener('click', () => {
-    if (neighborState === 'fighting' && isPointerLocked && !isPunching) {
-      const dist = playerPos.distanceTo(neighbor.position);
-      
-      // Trigger punch animation
-      isPunching = true;
-      punchTime = clock.getElapsedTime();
-      playPunchSound(true); // Player punch sound
-      
-      if (dist < 3) {
-        neighborAnger -= 25;
-        // Push neighbor back
-        const pushDir = new THREE.Vector3();
-        pushDir.subVectors(neighbor.position, playerPos);
-        pushDir.y = 0;
-        pushDir.normalize();
-        neighbor.position.x += pushDir.x * 0.8;
-        neighbor.position.z += pushDir.z * 0.8;
-        
-        if (neighborAnger <= 0) {
-          neighborState = 'retreating';
-          showDialog('NABOEN', 'Okay okay, jeg giver op! Slå dit græs...');
-          setTimeout(hideDialog, 2000);
-        }
-      }
-    }
-  });
+// Lure: throw a noisy decoy to a spot ahead of the player. The neighbor breaks
+// off and investigates it for a few seconds (see NeighborAI.distract).
+let decoyCooldown = 0;
+function throwDecoy() {
+  if (!neighborAI || !neighborAI.isActive() || !player.controlsEnabled) return;
+  if (decoyCooldown > 0) return;
+  decoyCooldown = 6;
+
+  const forward = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), playerYaw);
+  const pos = new THREE.Vector3(
+    Math.max(YARD.minX, Math.min(YARD.maxX, playerPos.x + forward.x * 6)),
+    0,
+    Math.max(YARD.minZ, Math.min(YARD.maxZ, playerPos.z + forward.z * 6))
+  );
+  if (decoyMarker) {
+    decoyMarker.position.copy(pos);
+    decoyMarker.visible = true;
+    setTimeout(() => { if (decoyMarker) decoyMarker.visible = false; }, 5000);
+  }
+  bus.emit(GameEvents.DISTRACT_NEIGHBOR, pos, 5);
+  playDecoySound();
 }
 
 function showDialog(speaker, text) {
@@ -1506,291 +1744,292 @@ function onWindowResize() {
   renderer.setSize(window.innerWidth, window.innerHeight);
 }
 
+// ---------------------------------------------------------------------------
+// System wiring: build the shared context and instantiate every gameplay system.
+// This is where the independent modules are connected via the EventBus + ctx.
+// ---------------------------------------------------------------------------
+function setupSystems() {
+  bus = new EventBus();
+
+  const boundary = {
+    minX: YARD.minX, maxX: YARD.maxX, minZ: YARD.minZ, maxZ: YARD.maxZ,
+    // Where the neighbor drags the ragdoll to end the game (out the side gate).
+    exitPoint: new THREE.Vector3(-12, 0, 0),
+  };
+
+  ctx = {
+    scene, camera, bus, clock: timeProvider,
+    player,
+    neighbor,
+    obstacles, pickups,
+    boundary,
+    spawnPoint: new THREE.Vector3(-15, 0, 0), // outside the fence
+    gatePoint: new THREE.Vector3(-9, 0, 0),   // the garden gate opening
+    isTallGrassAt,
+    isNeighborActive: () => neighborAI && neighborAI.isActive(),
+    // The neighbor's grabbing hand ~ his body; the joint keeps the ragdoll here.
+    getNeighborHandPos: () => new THREE.Vector3(neighbor.position.x, 0.6, neighbor.position.z),
+    getNearestWallPoint: (pos) => painting.getNearestWallPoint(pos),
+    onSabotage: (amount) => painting.sabotage(amount),
+    onPlayerCaught: () => {}, // NeighborAI already switches itself to DRAGGING
+    onEquipPaintTool: (on) => setPaintToolEquipped(on),
+    audio: { playHurt: playHurtSound, playCrash: playCrashSound },
+    projectiles: null, // set right after the ProjectileSystem is created
+  };
+
+  gameState = new GameStateManager(bus);
+  projectiles = new ProjectileSystem(ctx);
+  ctx.projectiles = projectiles;
+  neighborAI = new NeighborAI(ctx);
+  mowerPhysics = new MowerPhysics(ctx, mower);
+  ragdoll = new RagdollController(ctx);
+  painting = new PaintingSystem(ctx);
+
+  // Top-level reactions (HUD, banners, gate, modals) live here in main.
+  bus.on(GameEvents.PHASE_CHANGED, onPhaseChanged);
+  bus.on(GameEvents.SPAWN_NEIGHBOR, onNeighborSpawn);
+  bus.on(GameEvents.PAINT_PROGRESS, updatePaintHUD);
+  bus.on(GameEvents.GAME_OVER, onGameOver);
+}
+
+function onNeighborSpawn() {
+  // Swing the garden gate open and let the neighbor deliver his threat.
+  if (gardenGate) gardenGate.rotation.y = Math.PI / 2 - 0.8;
+  showDialog('SUR NABO', 'HEY! Stop den larm! Det er søndag formiddag!');
+  setTimeout(() => {
+    if (currentPhase === Phase.MOWING && showingDialog) {
+      showDialog('SUR NABO', 'Jeg kommer ind og SMADRER dig!');
+      setTimeout(() => { if (showingDialog) hideDialog(); }, 1800);
+    }
+  }, 2200);
+}
+
+function onPhaseChanged(phase, prev, meta) {
+  currentPhase = phase;
+  if (phase === Phase.PAINTING) {
+    if (mower) mower.visible = false;
+    updateModeHUD();
+    showLevelBanner('LEVEL 2 · MALER-FASEN', 'Mal huset! Naboen saboterer – blænd ham med maling (klik).');
+  } else if (phase === Phase.MOWING) {
+    if (mower) mower.visible = true;
+    updateModeHUD();
+  } else if (phase === Phase.GAME_OVER && meta === 'victory') {
+    onVictory();
+  }
+}
+
+function onGameOver(reason) {
+  if (reason === 'victory') return; // handled via PHASE_CHANGED -> onVictory
+  player.controlsEnabled = false;
+  document.exitPointerLock();
+  const title = document.getElementById('game-over-title');
+  const text = document.getElementById('game-over-text');
+  if (title) title.textContent = '💀 GAME OVER';
+  if (text) text.textContent = 'Naboen slæbte dig ud af haven! Tryk R eller klik for at prøve igen.';
+  document.getElementById('game-over-modal').classList.remove('hidden');
+}
+
+function onVictory() {
+  player.controlsEnabled = false;
+  document.exitPointerLock();
+  const modal = document.getElementById('completion-modal');
+  modal.querySelector('h2').textContent = '🎉 Du klarede den!';
+  const p = modal.querySelector('p');
+  if (p) p.innerHTML = 'Græsset er slået OG huset er malet. Du overlevede den sure nabo!';
+  document.getElementById('reward-amount').textContent = money;
+  modal.classList.remove('hidden');
+}
+
+function showLevelBanner(title, text) {
+  const banner = document.getElementById('level-banner');
+  if (!banner) return;
+  banner.querySelector('.banner-title').textContent = title;
+  banner.querySelector('.banner-text').textContent = text;
+  banner.classList.remove('hidden');
+  banner.classList.add('show');
+  setTimeout(() => {
+    banner.classList.remove('show');
+    setTimeout(() => banner.classList.add('hidden'), 600);
+  }, 3400);
+}
+
+function updateModeHUD() {
+  const grassDisplay = document.getElementById('grass-display');
+  const paintDisplay = document.getElementById('paint-display');
+  const hint = document.getElementById('controls-hint');
+  if (currentPhase === Phase.PAINTING) {
+    grassDisplay.classList.add('hidden');
+    paintDisplay.classList.remove('hidden');
+    if (hint) hint.textContent = '🖌️ Klik = Mal · E = Aflede';
+  } else {
+    grassDisplay.classList.remove('hidden');
+    paintDisplay.classList.add('hidden');
+    if (hint) hint.textContent = '⌨️ WASD + Mus · E = Aflede';
+  }
+}
+
+function updatePaintHUD(percent) {
+  const el = document.getElementById('paint-percent');
+  if (el) el.textContent = Math.floor(percent);
+}
+
 function restartGame() {
+  bus.emit(GameEvents.RESTART); // resets GameState, NeighborAI, Ragdoll, Painting
+  if (projectiles) projectiles.clear();
+
   grassBlades.forEach(blade => scene.remove(blade));
   createGrass();
+  createPickups();
+
   playerPos.set(-6, 1.5, 6);
   playerYaw = 0;
   playerPitch = 0;
-  playerHealth = 100;
   completed = false;
-  neighborState = 'waiting';
-  neighborAnger = 0;
-  isPunching = false;
-  neighbor.visible = false;
-  neighbor.position.set(-18, 0, 0);
-  // Reset gate
-  if (gardenGate) {
-    gardenGate.rotation.y = Math.PI / 2;
-  }
-  // Reset first-person view
+  currentPhase = Phase.MOWING;
+  player.controlsEnabled = true;
+  player.isRagdolled = false;
+
+  if (mower) mower.visible = true;
+  if (gardenGate) gardenGate.rotation.y = Math.PI / 2;
   if (playerArms) playerArms.visible = false;
-  if (fpMowerHandle) fpMowerHandle.visible = true;
+  setPaintToolEquipped(false);
+  if (decoyMarker) decoyMarker.visible = false;
+
   document.getElementById('completion-modal').classList.add('hidden');
-  document.getElementById('health-bar').classList.add('hidden');
-  document.getElementById('health-fill').style.width = '100%';
+  document.getElementById('game-over-modal').classList.add('hidden');
+
+  updateModeHUD();
   updateHUD();
 }
 
-function updateNeighbor() {
-  const time = clock.getElapsedTime();
-  const mowed = grassBlades.filter(b => !b.userData.isTall).length;
-  const percent = (mowed / totalGrass) * 100;
-
-  if (neighborState === 'waiting' && percent > 25) {
-    neighborState = 'walking_to_gate';
-    neighbor.visible = true;
-    // Start outside the fence, will walk to gate
-    neighbor.position.set(-15, 0, 0);
-    showDialog('SUR NABO', 'HEY! Kan du ikke stoppe den larm?! Det er søndag formiddag!');
-    setTimeout(() => {
-      hideDialog();
-      showDialog('SUR NABO', 'Jeg kommer ind og smadrer dig!');
-      setTimeout(hideDialog, 2000);
-    }, 2500);
-    document.getElementById('health-bar').classList.remove('hidden');
-    neighborAnger = 100;
-    
-    // Open the gate animation
-    if (gardenGate) {
-      gardenGate.rotation.y = Math.PI / 2 - 0.8; // Gate swings open
-    }
+// ---------------------------------------------------------------------------
+// Main per-frame update. main.js only handles player input, the first-person
+// camera and world animation; every gameplay mechanic lives in a system that we
+// simply step here with the shared dt.
+// ---------------------------------------------------------------------------
+function update(dt) {
+  // While the death screen is up we still integrate the ragdoll + projectiles so
+  // the "being dragged out" moment finishes playing behind the modal.
+  if (currentPhase === Phase.GAME_OVER) {
+    ragdoll.update(dt);
+    projectiles.update(dt);
+    return;
   }
 
-  // Walk to gate, then through it
-  if (neighborState === 'walking_to_gate' && !showingDialog) {
-    // Walk toward gate position
-    const gateTarget = new THREE.Vector3(-10, 0, 0);
-    const dir = new THREE.Vector3();
-    dir.subVectors(gateTarget, neighbor.position);
-    dir.y = 0;
-    
-    if (dir.length() > 0.5) {
-      dir.normalize();
-      neighbor.position.x += dir.x * 0.05;
-      neighbor.position.z += dir.z * 0.05;
-      neighbor.lookAt(gateTarget.x, neighbor.position.y, gateTarget.z);
-      
-      const walkCycle = Math.sin(time * 10) * 0.4;
-      neighbor.userData.leftLeg.rotation.x = walkCycle;
-      neighbor.userData.rightLeg.rotation.x = -walkCycle;
-    } else {
-      // Reached gate, now approach player
-      neighborState = 'approaching';
-    }
-  }
+  if (decoyCooldown > 0) decoyCooldown -= dt;
 
-  if (neighborState === 'approaching' && !showingDialog) {
-    const dir = new THREE.Vector3();
-    dir.subVectors(playerPos, neighbor.position);
-    dir.y = 0;
-    dir.normalize();
-    
-    neighbor.position.x += dir.x * 0.05;
-    neighbor.position.z += dir.z * 0.05;
-    neighbor.lookAt(playerPos.x, neighbor.position.y, playerPos.z);
-
-    const walkCycle = Math.sin(time * 10) * 0.4;
-    neighbor.userData.leftLeg.rotation.x = walkCycle;
-    neighbor.userData.rightLeg.rotation.x = -walkCycle;
-
-    if (playerPos.distanceTo(neighbor.position) < 2) {
-      neighborState = 'fighting';
-      // Show first-person arms, hide mower handle
-      if (playerArms) playerArms.visible = true;
-      if (fpMowerHandle) fpMowerHandle.visible = false;
-      showDialog('SUR NABO', 'Nu skal du få TÆSK!');
-      setTimeout(hideDialog, 1500);
-    }
-  }
-
-  if (neighborState === 'fighting' && !showingDialog) {
-    neighbor.lookAt(playerPos.x, neighbor.position.y, playerPos.z);
-    
-    const punchCycle = Math.sin(time * 8);
-    neighbor.userData.leftArm.rotation.x = punchCycle > 0 ? -punchCycle * 1.5 : 0;
-    neighbor.userData.rightArm.rotation.x = punchCycle < 0 ? punchCycle * 1.5 : 0;
-
-    // Neighbor hits player
-    if (playerPos.distanceTo(neighbor.position) < 2 && Math.random() < 0.015) {
-      playerHealth -= 5;
-      document.getElementById('health-fill').style.width = playerHealth + '%';
-      playPunchSound(false); // Neighbor punch
-      playHurtSound();
-      
-      if (playerHealth <= 0) {
-        showDialog('GAME OVER', 'Naboen slog dig ud! Tryk R for at prøve igen.');
-        neighborState = 'won';
-        if (playerArms) playerArms.visible = false;
-        if (fpMowerHandle) fpMowerHandle.visible = true;
-      }
-    }
-
-    // Follow player if too far
-    if (playerPos.distanceTo(neighbor.position) > 2) {
-      const dir = new THREE.Vector3();
-      dir.subVectors(playerPos, neighbor.position);
-      dir.y = 0;
-      dir.normalize();
-      neighbor.position.x += dir.x * 0.05;
-      neighbor.position.z += dir.z * 0.05;
-    }
-    
-    // Animate player arms during fight
-    if (playerArms && isPunching) {
-      const punchProgress = (time - punchTime) * 10;
-      if (punchProgress < 1) {
-        // Punch forward
-        playerArms.userData.rightArm.position.z = -0.5 - punchProgress * 0.3;
-        playerArms.userData.rightArm.position.y = -0.3 + punchProgress * 0.1;
-      } else if (punchProgress < 2) {
-        // Return
-        playerArms.userData.rightArm.position.z = -0.5 - (2 - punchProgress) * 0.3;
-        playerArms.userData.rightArm.position.y = -0.3 + (2 - punchProgress) * 0.1;
-      } else {
-        isPunching = false;
-        playerArms.userData.rightArm.position.z = -0.5;
-        playerArms.userData.rightArm.position.y = -0.3;
-      }
-    }
-  }
-
-  if (neighborState === 'retreating') {
-    // Walk back through gate
-    const gateTarget = new THREE.Vector3(-15, 0, 0);
-    const dir = new THREE.Vector3();
-    dir.subVectors(gateTarget, neighbor.position);
-    dir.y = 0;
-    dir.normalize();
-    
-    neighbor.position.x += dir.x * 0.05;
-    neighbor.position.z += dir.z * 0.05;
-    neighbor.lookAt(neighbor.position.x + dir.x, neighbor.position.y, neighbor.position.z + dir.z);
-
-    const walkCycle = Math.sin(time * 10) * 0.4;
-    neighbor.userData.leftLeg.rotation.x = walkCycle;
-    neighbor.userData.rightLeg.rotation.x = -walkCycle;
-
-    if (neighbor.position.x < -14) {
-      neighbor.visible = false;
-      neighborState = 'defeated';
-      document.getElementById('health-bar').classList.add('hidden');
-      // Close the gate
-      if (gardenGate) {
-        gardenGate.rotation.y = Math.PI / 2;
-      }
-      // Show mower handle again
-      if (playerArms) playerArms.visible = false;
-      if (fpMowerHandle) fpMowerHandle.visible = true;
-    }
-  }
-}
-
-function update() {
-  if (completed || neighborState === 'won') return;
-
+  // --- Player movement (locked out while ragdolled or during dialog). ---
+  const canMove = player.controlsEnabled && !player.isRagdolled && !showingDialog;
   const moveDir = new THREE.Vector3();
-  
-  if (keys.w) moveDir.z -= 1;
-  if (keys.s) moveDir.z += 1;
-  if (keys.a) moveDir.x -= 1;
-  if (keys.d) moveDir.x += 1;
-
-  const isMoving = moveDir.length() > 0 && !showingDialog;
-  
+  if (canMove) {
+    if (keys.w) moveDir.z -= 1;
+    if (keys.s) moveDir.z += 1;
+    if (keys.a) moveDir.x -= 1;
+    if (keys.d) moveDir.x += 1;
+  }
+  const isMoving = moveDir.lengthSq() > 0;
   if (isMoving) {
-    moveDir.normalize();
-    moveDir.applyAxisAngle(new THREE.Vector3(0, 1, 0), playerYaw);
-    
-    const newX = playerPos.x + moveDir.x * PLAYER_SPEED;
-    const newZ = playerPos.z + moveDir.z * PLAYER_SPEED;
-
+    moveDir.normalize().applyAxisAngle(new THREE.Vector3(0, 1, 0), playerYaw);
+    const newX = playerPos.x + moveDir.x * PLAYER_SPEED * dt;
+    const newZ = playerPos.z + moveDir.z * PLAYER_SPEED * dt;
     if (!isInHouseArea(newX, newZ) && !isOnDeck(newX, newZ)) {
-      playerPos.x = Math.max(-9.3, Math.min(9.3, newX));
-      playerPos.z = Math.max(-9.3, Math.min(9.3, newZ));
+      playerPos.x = Math.max(YARD.minX, Math.min(YARD.maxX, newX));
+      playerPos.z = Math.max(YARD.minZ, Math.min(YARD.maxZ, newZ));
     }
   }
-  
-  updateMowerSound(isMoving);
 
-  // First-person camera
-  camera.position.copy(playerPos);
-  camera.rotation.order = 'YXZ';
-  camera.rotation.y = playerYaw;
-  camera.rotation.x = playerPitch;
+  // Mower engine hum only in Level 1.
+  updateMowerSound(isMoving && currentPhase === Phase.MOWING);
 
-  // Mower in front of player
-  const mowerOffset = new THREE.Vector3(0, -0.6, 1.5);
-  mowerOffset.applyAxisAngle(new THREE.Vector3(0, 1, 0), playerYaw);
-  mower.position.set(
-    playerPos.x + mowerOffset.x,
-    0,
-    playerPos.z + mowerOffset.z
-  );
-  mower.rotation.y = playerYaw;
+  // First-person camera - the RagdollController takes over the camera while limp.
+  if (!player.isRagdolled) {
+    camera.position.copy(playerPos);
+    camera.rotation.order = 'YXZ';
+    camera.rotation.y = playerYaw;
+    camera.rotation.x = playerPitch;
+  }
 
-  // Grass sway animation
-  const time = clock.getElapsedTime();
+  // Grass sway.
   grassBlades.forEach(blade => {
     if (blade.userData.isTall) {
-      const sway = Math.sin(time * 1.5 + blade.userData.swayOffset) * 0.08;
-      blade.rotation.x = sway;
+      blade.rotation.x = Math.sin(simTime * 1.5 + blade.userData.swayOffset) * 0.08;
     }
   });
 
-  updateNeighbor();
-  checkMowing();
+  // Decoy beacon pulse.
+  if (decoyMarker && decoyMarker.visible) {
+    decoyMarker.rotation.y += dt * 3;
+    decoyMarker.scale.setScalar(1 + Math.sin(simTime * 8) * 0.12);
+  }
+
+  // --- Step the systems. Order matters: move the mower before we test mowing,
+  //     and update the neighbor before projectiles so hits register same-frame.
+  if (currentPhase === Phase.MOWING) {
+    mowerPhysics.update(dt);
+    checkMowing();
+  }
+  neighborAI.update(dt);
+  projectiles.update(dt);
+  ragdoll.update(dt);
+
   updateHUD();
-  checkCompletion();
+  if (currentPhase === Phase.MOWING) checkCompletion();
+}
+
+function mowedPercent() {
+  if (!totalGrass) return 0;
+  let mowed = 0;
+  for (const b of grassBlades) if (!b.userData.isTall) mowed++;
+  return (mowed / totalGrass) * 100;
 }
 
 function checkMowing() {
-  grassBlades.forEach(blade => {
-    if (!blade.userData.isTall) return;
-
-    const dist = Math.sqrt(
-      Math.pow(blade.position.x - mower.position.x, 2) +
-      Math.pow(blade.position.z - mower.position.z, 2)
-    );
-
-    if (dist < MOW_RADIUS) {
+  let mowedSomething = false;
+  for (const blade of grassBlades) {
+    if (!blade.userData.isTall) continue;
+    const dx = blade.position.x - mower.position.x;
+    const dz = blade.position.z - mower.position.z;
+    if (dx * dx + dz * dz < MOW_RADIUS * MOW_RADIUS) {
       blade.userData.isTall = false;
-      // Stripe pattern based on mow direction
       const stripeColor = blade.userData.stripeLight ? COLORS.grassStripeLight : COLORS.grassStripeDark;
       blade.material.color.setHex(stripeColor);
       blade.scale.y = 0.12;
       blade.position.y = 0.03;
+
+      // Keep the neighbor slowdown grid in sync as grass disappears.
+      const key = tallCellKey(blade.position.x, blade.position.z);
+      const remaining = (tallGrassGrid.get(key) || 1) - 1;
+      if (remaining <= 0) tallGrassGrid.delete(key);
+      else tallGrassGrid.set(key, remaining);
+
+      mowedSomething = true;
     }
-  });
+  }
+  // Broadcast progress so the GameStateManager can trigger the 25% spawn etc.
+  if (mowedSomething) bus.emit(GameEvents.MOW_PROGRESS, mowedPercent());
 }
 
 function updateHUD() {
-  const mowed = grassBlades.filter(b => !b.userData.isTall).length;
-  const percent = Math.floor((mowed / totalGrass) * 100);
-  document.getElementById('grass-percent').textContent = percent;
+  document.getElementById('grass-percent').textContent = Math.floor(mowedPercent());
   document.getElementById('money').textContent = money;
 }
 
 function checkCompletion() {
-  const mowed = grassBlades.filter(b => !b.userData.isTall).length;
-  const percent = (mowed / totalGrass) * 100;
-
-  if (percent >= 100 && !completed) {
+  if (!completed && mowedPercent() >= 100) {
     completed = true;
     money += MOW_REWARD;
-    document.getElementById('reward-amount').textContent = MOW_REWARD;
     document.getElementById('money').textContent = money;
-    document.exitPointerLock();
-
-    setTimeout(() => {
-      document.getElementById('completion-modal').classList.remove('hidden');
-    }, 500);
+    // Hand off to the GameStateManager: Level 1 complete -> Level 2 (painting).
+    bus.emit(GameEvents.LEVEL1_COMPLETE);
   }
 }
 
 function animate() {
   requestAnimationFrame(animate);
-  update();
+  // Single source of truth for delta time; clamp to avoid huge post-tab-switch steps.
+  const dt = Math.min(clock.getDelta(), 0.05);
+  simTime += dt;
+  update(dt);
   renderer.render(scene, camera);
 }
 

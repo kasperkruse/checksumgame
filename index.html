@@ -11,12 +11,18 @@
     <div id="game-container">
       <div id="click-prompt">
         <h2>🌿 Klik for at spille</h2>
-        <p>WASD = Bevæg dig · Mus = Kig rundt · Klik = Slå</p>
+        <p>WASD = Bevæg dig · Mus = Kig rundt · E = Aflede naboen</p>
+        <p class="prompt-sub">Slå græsset → ved 25% kommer den sure nabo! Undgå at blive slæbt ud.</p>
       </div>
       <div id="hud">
         <div class="hud-item" id="money-display">💰 Penge: <span id="money">0</span> kr</div>
         <div class="hud-item" id="grass-display">🌿 Græs slået: <span id="grass-percent">0</span>%</div>
-        <div class="hud-item" id="controls-hint">⌨️ WASD + Mus</div>
+        <div class="hud-item hidden" id="paint-display">🎨 Malet: <span id="paint-percent">0</span>%</div>
+        <div class="hud-item" id="controls-hint">⌨️ WASD + Mus · E = Aflede</div>
+      </div>
+      <div id="level-banner" class="hidden">
+        <div class="banner-title">LEVEL 2</div>
+        <div class="banner-text"></div>
       </div>
       <div id="health-bar" class="hidden">
         <div class="health-label">❤️ DIT LIV</div>
@@ -36,14 +42,21 @@
           <h2>🎉 Græsset er slået!</h2>
           <p>Du har tjent <span id="reward-amount">100</span> kr</p>
           <div class="next-jobs">
-            <h3>Næste opgaver:</h3>
+            <h3>Godt gået!</h3>
             <ul>
-              <li>🎨 Male hegnet (kommer snart)</li>
-              <li>🌳 Beskære hækken (kommer snart)</li>
-              <li>🚗 Vaske bilen (kommer snart)</li>
+              <li>✅ Græsslåning</li>
+              <li>✅ Maling af huset</li>
+              <li>😤 Overlevede den sure nabo</li>
             </ul>
           </div>
           <button id="restart-btn">🔄 Ny dag</button>
+        </div>
+      </div>
+      <div id="game-over-modal" class="hidden">
+        <div class="modal-content game-over">
+          <h2 id="game-over-title">💀 GAME OVER</h2>
+          <p id="game-over-text">Naboen slæbte dig ud af haven! Tryk R for at prøve igen.</p>
+          <button id="restart-btn-over" onclick="location.reload()">🔄 Prøv igen</button>
         </div>
       </div>
     </div>
