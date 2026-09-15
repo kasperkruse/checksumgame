@@ -31,6 +31,16 @@ let mowerOscillator = null;
 let mowerGain = null;
 let ambientStarted = false;
 
+// First-person arms and mower handle
+let playerArms = null;
+let fpMowerHandle = null;
+let isPunching = false;
+let punchTime = 0;
+
+// Garden gate
+let gardenGate = null;
+const GATE_POSITION = { x: -10, z: 0 };
+
 const keys = { w: false, a: false, s: false, d: false, space: false };
 
 // Bright suburban midday color palette
@@ -167,11 +177,14 @@ function init() {
   createGrass();
   createMower();
   createPicketFence();
+  createGardenGate();
   createTrees();
   createShrubs();
   createFlowerBeds();
   createMailbox();
   createNeighbor();
+  createFirstPersonArms();
+  createFirstPersonMower();
 
   setupControls();
   window.addEventListener('resize', onWindowResize);
@@ -589,41 +602,70 @@ function createPicketFence() {
   const fenceSize = 10;
   const spacing = 0.15;
 
-  // Front fence (with gate gap)
+  // Front fence (with path gap)
   for (let x = -fenceSize; x <= fenceSize; x += spacing) {
     if (x > -1.5 && x < 1.5) continue;
     scene.add(createPicket(x, fenceSize));
   }
 
-  // Side fences
+  // Right side fence (full)
   for (let z = -fenceSize; z <= fenceSize; z += spacing) {
     scene.add(createPicket(fenceSize, z));
-    if (z > -1.5 && z < 1.5) continue;
+  }
+
+  // Left side fence (with gate gap for neighbor)
+  for (let z = -fenceSize; z <= fenceSize; z += spacing) {
+    // Gate gap at z = 0 (neighbor entrance)
+    if (z > -1.2 && z < 1.2) continue;
     scene.add(createPicket(-fenceSize, z));
   }
 
-  // Horizontal rails
-  const railGeo = new THREE.BoxGeometry(20, 0.08, 0.04);
+  // Back fence (full)
+  for (let x = -fenceSize; x <= fenceSize; x += spacing) {
+    scene.add(createPicket(x, -fenceSize));
+  }
+
+  // Horizontal rails - front
+  const frontRailGeo = new THREE.BoxGeometry(20, 0.08, 0.04);
   [0.3, 0.75].forEach(y => {
-    const rail = new THREE.Mesh(railGeo, fenceMat);
+    const rail = new THREE.Mesh(frontRailGeo, fenceMat);
     rail.position.set(0, y, fenceSize);
     scene.add(rail);
   });
 
+  // Horizontal rails - back
+  [0.3, 0.75].forEach(y => {
+    const rail = new THREE.Mesh(frontRailGeo, fenceMat);
+    rail.position.set(0, y, -fenceSize);
+    scene.add(rail);
+  });
+
+  // Horizontal rails - right side (full)
   const sideRailGeo = new THREE.BoxGeometry(0.04, 0.08, 20);
   [0.3, 0.75].forEach(y => {
     const railR = new THREE.Mesh(sideRailGeo, fenceMat);
     railR.position.set(fenceSize, y, 0);
     scene.add(railR);
-    
-    const railL = new THREE.Mesh(sideRailGeo, fenceMat);
-    railL.position.set(-fenceSize, y, 0);
-    scene.add(railL);
   });
 
-  // Corner posts
+  // Horizontal rails - left side (split for gate)
+  const leftRailTopGeo = new THREE.BoxGeometry(0.04, 0.08, 8.8);
+  const leftRailBottomGeo = new THREE.BoxGeometry(0.04, 0.08, 8.8);
+  [0.3, 0.75].forEach(y => {
+    const railTop = new THREE.Mesh(leftRailTopGeo, fenceMat);
+    railTop.position.set(-fenceSize, y, -5.6);
+    scene.add(railTop);
+    
+    const railBottom = new THREE.Mesh(leftRailBottomGeo, fenceMat);
+    railBottom.position.set(-fenceSize, y, 5.6);
+    scene.add(railBottom);
+  });
+
+  // Corner posts and gate posts
   const postMat = new THREE.MeshLambertMaterial({ color: COLORS.fencePost });
   const postGeo = new THREE.CylinderGeometry(0.1, 0.12, 1.4, 8);
+  
+  // Four corners
   [[fenceSize, fenceSize], [fenceSize, -fenceSize], [-fenceSize, fenceSize], [-fenceSize, -fenceSize]].forEach(([x, z]) => {
     const post = new THREE.Mesh(postGeo, postMat);
     post.position.set(x, 0.7, z);
@@ -634,6 +676,74 @@ function createPicketFence() {
     cap.position.set(x, 1.4, z);
     scene.add(cap);
   });
+
+  // Gate posts on left side
+  [[-fenceSize, 1.2], [-fenceSize, -1.2]].forEach(([x, z]) => {
+    const post = new THREE.Mesh(postGeo, postMat);
+    post.position.set(x, 0.7, z);
+    post.castShadow = true;
+    scene.add(post);
+    
+    const cap = new THREE.Mesh(new THREE.SphereGeometry(0.12, 8, 4, 0, Math.PI * 2, 0, Math.PI / 2), postMat);
+    cap.position.set(x, 1.4, z);
+    scene.add(cap);
+  });
+
+  // Front gate posts
+  [[-1.5, fenceSize], [1.5, fenceSize]].forEach(([x, z]) => {
+    const post = new THREE.Mesh(postGeo, postMat);
+    post.position.set(x, 0.7, z);
+    post.castShadow = true;
+    scene.add(post);
+    
+    const cap = new THREE.Mesh(new THREE.SphereGeometry(0.12, 8, 4, 0, Math.PI * 2, 0, Math.PI / 2), postMat);
+    cap.position.set(x, 1.4, z);
+    scene.add(cap);
+  });
+}
+
+function createGardenGate() {
+  gardenGate = new THREE.Group();
+  
+  const gateMat = new THREE.MeshLambertMaterial({ color: COLORS.fence });
+  
+  // Gate frame
+  const gateWidth = 2.2;
+  const gateHeight = 1.1;
+  
+  // Vertical bars
+  for (let i = 0; i < 8; i++) {
+    const bar = new THREE.Mesh(new THREE.BoxGeometry(0.06, gateHeight, 0.025), gateMat);
+    bar.position.set(-gateWidth/2 + 0.15 + i * 0.28, gateHeight/2, 0);
+    gardenGate.add(bar);
+    
+    // Pointed tops
+    const point = new THREE.Mesh(new THREE.ConeGeometry(0.04, 0.12, 4), gateMat);
+    point.position.set(-gateWidth/2 + 0.15 + i * 0.28, gateHeight + 0.06, 0);
+    point.rotation.y = Math.PI / 4;
+    gardenGate.add(point);
+  }
+  
+  // Horizontal rails
+  const railGeo = new THREE.BoxGeometry(gateWidth, 0.06, 0.04);
+  [0.25, 0.7].forEach(y => {
+    const rail = new THREE.Mesh(railGeo, gateMat);
+    rail.position.set(0, y, 0);
+    gardenGate.add(rail);
+  });
+  
+  // Diagonal brace
+  const braceLen = Math.sqrt(gateWidth * gateWidth + 0.45 * 0.45);
+  const brace = new THREE.Mesh(new THREE.BoxGeometry(braceLen, 0.04, 0.03), gateMat);
+  brace.position.set(0, 0.475, 0);
+  brace.rotation.z = Math.atan2(0.45, gateWidth);
+  gardenGate.add(brace);
+  
+  // Gate is on the left side fence
+  gardenGate.position.set(-10, 0, 0);
+  gardenGate.rotation.y = Math.PI / 2;
+  
+  scene.add(gardenGate);
 }
 
 function createTrees() {
@@ -785,6 +895,132 @@ function createMailbox() {
 
   mailbox.position.set(8, 0, 9);
   scene.add(mailbox);
+}
+
+function createFirstPersonArms() {
+  playerArms = new THREE.Group();
+  
+  const skinMat = new THREE.MeshLambertMaterial({ color: 0xDEB887 });
+  const shirtMat = new THREE.MeshLambertMaterial({ color: 0xB22222 }); // Red plaid shirt
+  const shirtDarkMat = new THREE.MeshLambertMaterial({ color: 0x8B0000 });
+  
+  // Left arm
+  const leftArm = new THREE.Group();
+  
+  // Upper arm (shirt sleeve)
+  const leftSleeve = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.07, 0.25, 8), shirtMat);
+  leftSleeve.rotation.z = Math.PI / 2 + 0.3;
+  leftSleeve.position.set(-0.15, -0.12, 0);
+  leftArm.add(leftSleeve);
+  
+  // Plaid stripe
+  const leftStripe = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.02, 0.08), shirtDarkMat);
+  leftStripe.position.set(-0.15, -0.12, 0.05);
+  leftStripe.rotation.z = 0.3;
+  leftArm.add(leftStripe);
+  
+  // Forearm (skin)
+  const leftForearm = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.05, 0.2, 8), skinMat);
+  leftForearm.rotation.z = Math.PI / 2 + 0.5;
+  leftForearm.position.set(-0.28, -0.18, 0);
+  leftArm.add(leftForearm);
+  
+  // Hand
+  const leftHand = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 6), skinMat);
+  leftHand.position.set(-0.38, -0.22, 0);
+  leftHand.scale.set(1, 0.6, 0.8);
+  leftArm.add(leftHand);
+  
+  leftArm.position.set(-0.25, -0.3, -0.5);
+  playerArms.add(leftArm);
+  playerArms.userData.leftArm = leftArm;
+  
+  // Right arm (mirror)
+  const rightArm = new THREE.Group();
+  
+  const rightSleeve = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.07, 0.25, 8), shirtMat);
+  rightSleeve.rotation.z = -Math.PI / 2 - 0.3;
+  rightSleeve.position.set(0.15, -0.12, 0);
+  rightArm.add(rightSleeve);
+  
+  const rightStripe = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.02, 0.08), shirtDarkMat);
+  rightStripe.position.set(0.15, -0.12, 0.05);
+  rightStripe.rotation.z = -0.3;
+  rightArm.add(rightStripe);
+  
+  const rightForearm = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.05, 0.2, 8), skinMat);
+  rightForearm.rotation.z = -Math.PI / 2 - 0.5;
+  rightForearm.position.set(0.28, -0.18, 0);
+  rightArm.add(rightForearm);
+  
+  const rightHand = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 6), skinMat);
+  rightHand.position.set(0.38, -0.22, 0);
+  rightHand.scale.set(1, 0.6, 0.8);
+  rightArm.add(rightHand);
+  
+  rightArm.position.set(0.25, -0.3, -0.5);
+  playerArms.add(rightArm);
+  playerArms.userData.rightArm = rightArm;
+  
+  // Arms are hidden by default (shown during fight)
+  playerArms.visible = false;
+  camera.add(playerArms);
+}
+
+function createFirstPersonMower() {
+  fpMowerHandle = new THREE.Group();
+  
+  const handleMat = new THREE.MeshLambertMaterial({ color: 0x333333 });
+  const gripMat = new THREE.MeshLambertMaterial({ color: 0x111111 });
+  const skinMat = new THREE.MeshLambertMaterial({ color: 0xDEB887 });
+  const shirtMat = new THREE.MeshLambertMaterial({ color: 0xB22222 });
+  
+  // Left handle bar
+  const leftHandle = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.6, 8), handleMat);
+  leftHandle.rotation.x = 0.4;
+  leftHandle.position.set(-0.18, -0.25, -0.35);
+  fpMowerHandle.add(leftHandle);
+  
+  // Right handle bar  
+  const rightHandle = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.6, 8), handleMat);
+  rightHandle.rotation.x = 0.4;
+  rightHandle.position.set(0.18, -0.25, -0.35);
+  fpMowerHandle.add(rightHandle);
+  
+  // Cross grip bar
+  const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.42, 8), gripMat);
+  grip.rotation.z = Math.PI / 2;
+  grip.position.set(0, -0.08, -0.12);
+  fpMowerHandle.add(grip);
+  
+  // Left hand on grip
+  const leftHand = new THREE.Group();
+  const leftHandMesh = new THREE.Mesh(new THREE.SphereGeometry(0.04, 8, 6), skinMat);
+  leftHandMesh.scale.set(1.2, 0.7, 0.9);
+  leftHand.add(leftHandMesh);
+  // Sleeve
+  const leftSleeve = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.06, 0.15, 8), shirtMat);
+  leftSleeve.rotation.x = -0.3;
+  leftSleeve.position.set(0, 0.08, 0.05);
+  leftHand.add(leftSleeve);
+  leftHand.position.set(-0.12, -0.06, -0.12);
+  fpMowerHandle.add(leftHand);
+  
+  // Right hand on grip
+  const rightHand = new THREE.Group();
+  const rightHandMesh = new THREE.Mesh(new THREE.SphereGeometry(0.04, 8, 6), skinMat);
+  rightHandMesh.scale.set(1.2, 0.7, 0.9);
+  rightHand.add(rightHandMesh);
+  const rightSleeve = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.06, 0.15, 8), shirtMat);
+  rightSleeve.rotation.x = -0.3;
+  rightSleeve.position.set(0, 0.08, 0.05);
+  rightHand.add(rightSleeve);
+  rightHand.position.set(0.12, -0.06, -0.12);
+  fpMowerHandle.add(rightHand);
+  
+  // Mower visible in first person is shown by default
+  fpMowerHandle.visible = true;
+  camera.add(fpMowerHandle);
 }
 
 function createGrass() {
@@ -1121,6 +1357,75 @@ function updateMowerSound(isMoving) {
   mowerGain.gain.linearRampToValueAtTime(targetVolume, audioContext.currentTime + 0.1);
 }
 
+function playPunchSound(isPlayerPunch) {
+  if (!audioContext) return;
+  
+  // Create punch impact sound
+  const osc = audioContext.createOscillator();
+  const gain = audioContext.createGain();
+  const filter = audioContext.createBiquadFilter();
+  
+  filter.type = 'lowpass';
+  filter.frequency.value = isPlayerPunch ? 200 : 150;
+  
+  osc.type = 'sawtooth';
+  osc.frequency.value = isPlayerPunch ? 80 : 60;
+  
+  gain.gain.setValueAtTime(0.3, audioContext.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.15);
+  
+  osc.connect(filter);
+  filter.connect(gain);
+  gain.connect(audioContext.destination);
+  
+  osc.start(audioContext.currentTime);
+  osc.stop(audioContext.currentTime + 0.15);
+  
+  // Add noise burst for impact
+  const noiseGain = audioContext.createGain();
+  noiseGain.gain.setValueAtTime(0.15, audioContext.currentTime);
+  noiseGain.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + 0.1);
+  
+  const noiseFilter = audioContext.createBiquadFilter();
+  noiseFilter.type = 'bandpass';
+  noiseFilter.frequency.value = isPlayerPunch ? 1000 : 800;
+  noiseFilter.Q.value = 1;
+  
+  const bufferSize = audioContext.sampleRate * 0.1;
+  const noiseBuffer = audioContext.createBuffer(1, bufferSize, audioContext.sampleRate);
+  const output = noiseBuffer.getChannelData(0);
+  for (let i = 0; i < bufferSize; i++) {
+    output[i] = Math.random() * 2 - 1;
+  }
+  
+  const noise = audioContext.createBufferSource();
+  noise.buffer = noiseBuffer;
+  noise.connect(noiseFilter);
+  noiseFilter.connect(noiseGain);
+  noiseGain.connect(audioContext.destination);
+  noise.start(audioContext.currentTime);
+}
+
+function playHurtSound() {
+  if (!audioContext) return;
+  
+  const osc = audioContext.createOscillator();
+  const gain = audioContext.createGain();
+  
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(300, audioContext.currentTime);
+  osc.frequency.exponentialRampToValueAtTime(100, audioContext.currentTime + 0.2);
+  
+  gain.gain.setValueAtTime(0.15, audioContext.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.2);
+  
+  osc.connect(gain);
+  gain.connect(audioContext.destination);
+  
+  osc.start(audioContext.currentTime);
+  osc.stop(audioContext.currentTime + 0.2);
+}
+
 function setupControls() {
   window.addEventListener('keydown', (e) => {
     if (e.code === 'KeyW') keys.w = true;
@@ -1152,11 +1457,24 @@ function setupControls() {
   });
 
   window.addEventListener('click', () => {
-    if (neighborState === 'fighting' && isPointerLocked) {
+    if (neighborState === 'fighting' && isPointerLocked && !isPunching) {
       const dist = playerPos.distanceTo(neighbor.position);
+      
+      // Trigger punch animation
+      isPunching = true;
+      punchTime = clock.getElapsedTime();
+      playPunchSound(true); // Player punch sound
+      
       if (dist < 3) {
         neighborAnger -= 25;
-        neighbor.position.x -= 0.5;
+        // Push neighbor back
+        const pushDir = new THREE.Vector3();
+        pushDir.subVectors(neighbor.position, playerPos);
+        pushDir.y = 0;
+        pushDir.normalize();
+        neighbor.position.x += pushDir.x * 0.8;
+        neighbor.position.z += pushDir.z * 0.8;
+        
         if (neighborAnger <= 0) {
           neighborState = 'retreating';
           showDialog('NABOEN', 'Okay okay, jeg giver op! Slå dit græs...');
@@ -1198,8 +1516,16 @@ function restartGame() {
   completed = false;
   neighborState = 'waiting';
   neighborAnger = 0;
+  isPunching = false;
   neighbor.visible = false;
   neighbor.position.set(-18, 0, 0);
+  // Reset gate
+  if (gardenGate) {
+    gardenGate.rotation.y = Math.PI / 2;
+  }
+  // Reset first-person view
+  if (playerArms) playerArms.visible = false;
+  if (fpMowerHandle) fpMowerHandle.visible = true;
   document.getElementById('completion-modal').classList.add('hidden');
   document.getElementById('health-bar').classList.add('hidden');
   document.getElementById('health-fill').style.width = '100%';
@@ -1212,17 +1538,46 @@ function updateNeighbor() {
   const percent = (mowed / totalGrass) * 100;
 
   if (neighborState === 'waiting' && percent > 25) {
-    neighborState = 'approaching';
+    neighborState = 'walking_to_gate';
     neighbor.visible = true;
-    neighbor.position.set(-12, 0, 0);
+    // Start outside the fence, will walk to gate
+    neighbor.position.set(-15, 0, 0);
     showDialog('SUR NABO', 'HEY! Kan du ikke stoppe den larm?! Det er søndag formiddag!');
     setTimeout(() => {
       hideDialog();
-      showDialog('SUR NABO', 'Jeg kommer over og smadrer dig!');
+      showDialog('SUR NABO', 'Jeg kommer ind og smadrer dig!');
       setTimeout(hideDialog, 2000);
     }, 2500);
     document.getElementById('health-bar').classList.remove('hidden');
     neighborAnger = 100;
+    
+    // Open the gate animation
+    if (gardenGate) {
+      gardenGate.rotation.y = Math.PI / 2 - 0.8; // Gate swings open
+    }
+  }
+
+  // Walk to gate, then through it
+  if (neighborState === 'walking_to_gate' && !showingDialog) {
+    // Walk toward gate position
+    const gateTarget = new THREE.Vector3(-10, 0, 0);
+    const dir = new THREE.Vector3();
+    dir.subVectors(gateTarget, neighbor.position);
+    dir.y = 0;
+    
+    if (dir.length() > 0.5) {
+      dir.normalize();
+      neighbor.position.x += dir.x * 0.05;
+      neighbor.position.z += dir.z * 0.05;
+      neighbor.lookAt(gateTarget.x, neighbor.position.y, gateTarget.z);
+      
+      const walkCycle = Math.sin(time * 10) * 0.4;
+      neighbor.userData.leftLeg.rotation.x = walkCycle;
+      neighbor.userData.rightLeg.rotation.x = -walkCycle;
+    } else {
+      // Reached gate, now approach player
+      neighborState = 'approaching';
+    }
   }
 
   if (neighborState === 'approaching' && !showingDialog) {
@@ -1231,8 +1586,8 @@ function updateNeighbor() {
     dir.y = 0;
     dir.normalize();
     
-    neighbor.position.x += dir.x * 0.04;
-    neighbor.position.z += dir.z * 0.04;
+    neighbor.position.x += dir.x * 0.05;
+    neighbor.position.z += dir.z * 0.05;
     neighbor.lookAt(playerPos.x, neighbor.position.y, playerPos.z);
 
     const walkCycle = Math.sin(time * 10) * 0.4;
@@ -1241,6 +1596,9 @@ function updateNeighbor() {
 
     if (playerPos.distanceTo(neighbor.position) < 2) {
       neighborState = 'fighting';
+      // Show first-person arms, hide mower handle
+      if (playerArms) playerArms.visible = true;
+      if (fpMowerHandle) fpMowerHandle.visible = false;
       showDialog('SUR NABO', 'Nu skal du få TÆSK!');
       setTimeout(hideDialog, 1500);
     }
@@ -1253,16 +1611,22 @@ function updateNeighbor() {
     neighbor.userData.leftArm.rotation.x = punchCycle > 0 ? -punchCycle * 1.5 : 0;
     neighbor.userData.rightArm.rotation.x = punchCycle < 0 ? punchCycle * 1.5 : 0;
 
-    if (playerPos.distanceTo(neighbor.position) < 2 && Math.random() < 0.02) {
+    // Neighbor hits player
+    if (playerPos.distanceTo(neighbor.position) < 2 && Math.random() < 0.015) {
       playerHealth -= 5;
       document.getElementById('health-fill').style.width = playerHealth + '%';
+      playPunchSound(false); // Neighbor punch
+      playHurtSound();
       
       if (playerHealth <= 0) {
         showDialog('GAME OVER', 'Naboen slog dig ud! Tryk R for at prøve igen.');
         neighborState = 'won';
+        if (playerArms) playerArms.visible = false;
+        if (fpMowerHandle) fpMowerHandle.visible = true;
       }
     }
 
+    // Follow player if too far
     if (playerPos.distanceTo(neighbor.position) > 2) {
       const dir = new THREE.Vector3();
       dir.subVectors(playerPos, neighbor.position);
@@ -1271,11 +1635,34 @@ function updateNeighbor() {
       neighbor.position.x += dir.x * 0.05;
       neighbor.position.z += dir.z * 0.05;
     }
+    
+    // Animate player arms during fight
+    if (playerArms && isPunching) {
+      const punchProgress = (time - punchTime) * 10;
+      if (punchProgress < 1) {
+        // Punch forward
+        playerArms.userData.rightArm.position.z = -0.5 - punchProgress * 0.3;
+        playerArms.userData.rightArm.position.y = -0.3 + punchProgress * 0.1;
+      } else if (punchProgress < 2) {
+        // Return
+        playerArms.userData.rightArm.position.z = -0.5 - (2 - punchProgress) * 0.3;
+        playerArms.userData.rightArm.position.y = -0.3 + (2 - punchProgress) * 0.1;
+      } else {
+        isPunching = false;
+        playerArms.userData.rightArm.position.z = -0.5;
+        playerArms.userData.rightArm.position.y = -0.3;
+      }
+    }
   }
 
   if (neighborState === 'retreating') {
-    const dir = new THREE.Vector3(-18 - neighbor.position.x, 0, 0 - neighbor.position.z);
+    // Walk back through gate
+    const gateTarget = new THREE.Vector3(-15, 0, 0);
+    const dir = new THREE.Vector3();
+    dir.subVectors(gateTarget, neighbor.position);
+    dir.y = 0;
     dir.normalize();
+    
     neighbor.position.x += dir.x * 0.05;
     neighbor.position.z += dir.z * 0.05;
     neighbor.lookAt(neighbor.position.x + dir.x, neighbor.position.y, neighbor.position.z + dir.z);
@@ -1284,10 +1671,17 @@ function updateNeighbor() {
     neighbor.userData.leftLeg.rotation.x = walkCycle;
     neighbor.userData.rightLeg.rotation.x = -walkCycle;
 
-    if (neighbor.position.x < -16) {
+    if (neighbor.position.x < -14) {
       neighbor.visible = false;
       neighborState = 'defeated';
       document.getElementById('health-bar').classList.add('hidden');
+      // Close the gate
+      if (gardenGate) {
+        gardenGate.rotation.y = Math.PI / 2;
+      }
+      // Show mower handle again
+      if (playerArms) playerArms.visible = false;
+      if (fpMowerHandle) fpMowerHandle.visible = true;
     }
   }
 }
