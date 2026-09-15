@@ -18,18 +18,21 @@ let clock = new THREE.Clock();
 const keys = { up: false, down: false, left: false, right: false };
 
 const COLORS = {
-  sky: 0x87CEEB,
-  ground: 0x90B060,
-  grassTall: 0x3D8B37,
-  grassCut: 0xA8D08D,
+  sky: 0x9BC4E2,
+  ground: 0x7BA05B,
+  grassTall: 0x4A9B45,
+  grassCut: 0x8FBF7F,
   houseWall: 0xE8DCC8,
   houseRoof: 0x8B5A3C,
   houseDoor: 0x5D4037,
   houseWindow: 0x87CEEB,
-  playerShirt: 0x4A90D9,
-  playerPants: 0x4A5568,
-  playerSkin: 0xFFDBAC,
-  playerHair: 0x4A3728,
+  playerShirt: 0xFF8C42,
+  playerPants: 0x5D5D5D,
+  playerSkin: 0xD4A574,
+  playerHair: 0x3D2314,
+  eyeWhite: 0xFFFEF0,
+  eyePupil: 0x2D2D2D,
+  eyebrow: 0x3D2314,
   mower: 0xE53935,
   mowerHandle: 0x424242,
   path: 0xD4C4A8,
@@ -72,6 +75,7 @@ function init() {
   createGrass();
   createPlayer();
   createFence();
+  createTrees();
 
   setupControls();
   window.addEventListener('resize', onWindowResize);
@@ -216,51 +220,140 @@ function isOnPath(x, z) {
 function createPlayer() {
   player = new THREE.Group();
 
-  const bodyGeo = new THREE.BoxGeometry(0.4, 0.5, 0.25);
-  const bodyMat = new THREE.MeshLambertMaterial({ color: COLORS.playerShirt });
-  const body = new THREE.Mesh(bodyGeo, bodyMat);
-  body.position.y = 0.6;
-  body.castShadow = true;
-  player.add(body);
-
-  const headGeo = new THREE.BoxGeometry(0.3, 0.3, 0.3);
+  const headGroup = new THREE.Group();
+  headGroup.position.y = 1.15;
+  
+  const headGeo = new THREE.SphereGeometry(0.28, 16, 12);
   const headMat = new THREE.MeshLambertMaterial({ color: COLORS.playerSkin });
   const head = new THREE.Mesh(headGeo, headMat);
-  head.position.y = 1.0;
+  head.scale.set(1, 1.1, 0.95);
   head.castShadow = true;
-  player.add(head);
+  headGroup.add(head);
 
-  const hairGeo = new THREE.BoxGeometry(0.32, 0.12, 0.32);
+  const hairGeo = new THREE.SphereGeometry(0.29, 16, 8, 0, Math.PI * 2, 0, Math.PI * 0.5);
   const hairMat = new THREE.MeshLambertMaterial({ color: COLORS.playerHair });
   const hair = new THREE.Mesh(hairGeo, hairMat);
-  hair.position.y = 1.2;
-  player.add(hair);
+  hair.position.y = 0.02;
+  hair.scale.set(1, 0.8, 0.95);
+  headGroup.add(hair);
 
-  const legGeo = new THREE.BoxGeometry(0.15, 0.35, 0.15);
-  const legMat = new THREE.MeshLambertMaterial({ color: COLORS.playerPants });
-  const leftLeg = new THREE.Mesh(legGeo, legMat);
-  leftLeg.position.set(-0.1, 0.18, 0);
-  leftLeg.castShadow = true;
-  player.add(leftLeg);
-  player.userData.leftLeg = leftLeg;
+  const eyeWhiteMat = new THREE.MeshLambertMaterial({ color: COLORS.eyeWhite });
+  const eyePupilMat = new THREE.MeshLambertMaterial({ color: COLORS.eyePupil });
+  
+  [-0.09, 0.09].forEach(x => {
+    const eyeWhiteGeo = new THREE.SphereGeometry(0.07, 12, 8);
+    const eyeWhite = new THREE.Mesh(eyeWhiteGeo, eyeWhiteMat);
+    eyeWhite.position.set(x, 0.03, 0.22);
+    eyeWhite.scale.set(0.8, 1, 0.5);
+    headGroup.add(eyeWhite);
 
-  const rightLeg = new THREE.Mesh(legGeo, legMat);
-  rightLeg.position.set(0.1, 0.18, 0);
-  rightLeg.castShadow = true;
-  player.add(rightLeg);
-  player.userData.rightLeg = rightLeg;
+    const pupilGeo = new THREE.SphereGeometry(0.035, 8, 6);
+    const pupil = new THREE.Mesh(pupilGeo, eyePupilMat);
+    pupil.position.set(x, 0.03, 0.26);
+    headGroup.add(pupil);
+  });
 
-  const armGeo = new THREE.BoxGeometry(0.12, 0.4, 0.12);
+  const eyebrowMat = new THREE.MeshLambertMaterial({ color: COLORS.eyebrow });
+  [-0.09, 0.09].forEach((x, i) => {
+    const eyebrowGeo = new THREE.BoxGeometry(0.08, 0.02, 0.02);
+    const eyebrow = new THREE.Mesh(eyebrowGeo, eyebrowMat);
+    eyebrow.position.set(x, 0.14, 0.24);
+    eyebrow.rotation.z = i === 0 ? 0.15 : -0.15;
+    headGroup.add(eyebrow);
+  });
+
+  const noseGeo = new THREE.SphereGeometry(0.03, 8, 6);
+  const noseMat = new THREE.MeshLambertMaterial({ color: 0xC49660 });
+  const nose = new THREE.Mesh(noseGeo, noseMat);
+  nose.position.set(0, -0.02, 0.26);
+  nose.scale.set(1, 0.8, 0.6);
+  headGroup.add(nose);
+
+  const mouthGeo = new THREE.TorusGeometry(0.04, 0.012, 8, 12, Math.PI);
+  const mouthMat = new THREE.MeshLambertMaterial({ color: 0x8B5A5A });
+  const mouth = new THREE.Mesh(mouthGeo, mouthMat);
+  mouth.position.set(0, -0.1, 0.22);
+  mouth.rotation.x = Math.PI;
+  mouth.rotation.z = Math.PI;
+  headGroup.add(mouth);
+
+  const earGeo = new THREE.SphereGeometry(0.05, 8, 6);
+  [-0.26, 0.26].forEach(x => {
+    const ear = new THREE.Mesh(earGeo, headMat);
+    ear.position.set(x, 0, 0);
+    ear.scale.set(0.4, 0.7, 0.5);
+    headGroup.add(ear);
+  });
+
+  player.add(headGroup);
+  player.userData.head = headGroup;
+
+  const torsoGeo = new THREE.CylinderGeometry(0.18, 0.22, 0.45, 12);
+  const torsoMat = new THREE.MeshLambertMaterial({ color: COLORS.playerShirt });
+  const torso = new THREE.Mesh(torsoGeo, torsoMat);
+  torso.position.y = 0.7;
+  torso.castShadow = true;
+  player.add(torso);
+
+  const shoulderGeo = new THREE.SphereGeometry(0.08, 8, 6);
+  [-0.22, 0.22].forEach(x => {
+    const shoulder = new THREE.Mesh(shoulderGeo, torsoMat);
+    shoulder.position.set(x, 0.85, 0);
+    shoulder.castShadow = true;
+    player.add(shoulder);
+  });
+
+  const armGeo = new THREE.CylinderGeometry(0.05, 0.06, 0.35, 8);
   const armMat = new THREE.MeshLambertMaterial({ color: COLORS.playerShirt });
-  const leftArm = new THREE.Mesh(armGeo, armMat);
-  leftArm.position.set(-0.3, 0.55, 0.15);
-  leftArm.rotation.x = -0.5;
-  player.add(leftArm);
+  const skinMat = new THREE.MeshLambertMaterial({ color: COLORS.playerSkin });
 
-  const rightArm = new THREE.Mesh(armGeo, armMat);
-  rightArm.position.set(0.3, 0.55, 0.15);
-  rightArm.rotation.x = -0.5;
-  player.add(rightArm);
+  const leftArmGroup = new THREE.Group();
+  leftArmGroup.position.set(-0.28, 0.7, 0.1);
+  const leftUpperArm = new THREE.Mesh(armGeo, armMat);
+  leftUpperArm.rotation.x = -0.4;
+  leftUpperArm.castShadow = true;
+  leftArmGroup.add(leftUpperArm);
+  const leftHand = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 6), skinMat);
+  leftHand.position.set(0, -0.2, 0.08);
+  leftArmGroup.add(leftHand);
+  player.add(leftArmGroup);
+
+  const rightArmGroup = new THREE.Group();
+  rightArmGroup.position.set(0.28, 0.7, 0.1);
+  const rightUpperArm = new THREE.Mesh(armGeo, armMat);
+  rightUpperArm.rotation.x = -0.4;
+  rightUpperArm.castShadow = true;
+  rightArmGroup.add(rightUpperArm);
+  const rightHand = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 6), skinMat);
+  rightHand.position.set(0, -0.2, 0.08);
+  rightArmGroup.add(rightHand);
+  player.add(rightArmGroup);
+
+  const legGeo = new THREE.CylinderGeometry(0.06, 0.07, 0.4, 8);
+  const legMat = new THREE.MeshLambertMaterial({ color: COLORS.playerPants });
+  const shoeMat = new THREE.MeshLambertMaterial({ color: 0x2D2D2D });
+
+  const leftLegGroup = new THREE.Group();
+  leftLegGroup.position.set(-0.1, 0.28, 0);
+  const leftLeg = new THREE.Mesh(legGeo, legMat);
+  leftLeg.castShadow = true;
+  leftLegGroup.add(leftLeg);
+  const leftShoe = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.06, 0.16), shoeMat);
+  leftShoe.position.set(0, -0.22, 0.03);
+  leftLegGroup.add(leftShoe);
+  player.add(leftLegGroup);
+  player.userData.leftLeg = leftLegGroup;
+
+  const rightLegGroup = new THREE.Group();
+  rightLegGroup.position.set(0.1, 0.28, 0);
+  const rightLeg = new THREE.Mesh(legGeo, legMat);
+  rightLeg.castShadow = true;
+  rightLegGroup.add(rightLeg);
+  const rightShoe = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.06, 0.16), shoeMat);
+  rightShoe.position.set(0, -0.22, 0.03);
+  rightLegGroup.add(rightShoe);
+  player.add(rightLegGroup);
+  player.userData.rightLeg = rightLegGroup;
 
   createMower();
 
@@ -361,6 +454,45 @@ function createFence() {
       scene.add(rail2);
     });
   }
+}
+
+function createTrees() {
+  const treePositions = [
+    [-9, -6], [-11, 2], [-10, 7], [9, -5], [11, 0], [10, 6],
+    [-9, -9], [9, -9], [-12, -3], [12, 3]
+  ];
+
+  treePositions.forEach(([x, z]) => {
+    const tree = new THREE.Group();
+
+    const trunkGeo = new THREE.CylinderGeometry(0.15, 0.2, 1.2, 8);
+    const trunkMat = new THREE.MeshLambertMaterial({ color: 0x5D4037 });
+    const trunk = new THREE.Mesh(trunkGeo, trunkMat);
+    trunk.position.y = 0.6;
+    trunk.castShadow = true;
+    tree.add(trunk);
+
+    const foliageMat = new THREE.MeshLambertMaterial({ color: 0x2E7D32 });
+    
+    const foliage1 = new THREE.Mesh(new THREE.ConeGeometry(1.2, 2, 8), foliageMat);
+    foliage1.position.y = 2.2;
+    foliage1.castShadow = true;
+    tree.add(foliage1);
+
+    const foliage2 = new THREE.Mesh(new THREE.ConeGeometry(0.9, 1.5, 8), foliageMat);
+    foliage2.position.y = 3.2;
+    foliage2.castShadow = true;
+    tree.add(foliage2);
+
+    const foliage3 = new THREE.Mesh(new THREE.ConeGeometry(0.6, 1.2, 8), foliageMat);
+    foliage3.position.y = 4;
+    foliage3.castShadow = true;
+    tree.add(foliage3);
+
+    tree.position.set(x, 0, z);
+    tree.rotation.y = Math.random() * Math.PI;
+    scene.add(tree);
+  });
 }
 
 function setupControls() {
