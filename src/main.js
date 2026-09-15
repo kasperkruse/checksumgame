@@ -23,12 +23,22 @@ let money = 0;
 let completed = false;
 let clock = new THREE.Clock();
 
-let playerPos = new THREE.Vector3(-6, 1.5, 10);
+const EYE_HEIGHT = 1.5;
+const JUMP_SPEED = 0.21;
+const GRAVITY = 0.011;
+const DECK_LIFT = 0.28;
+
+let playerPos = new THREE.Vector3(-6, EYE_HEIGHT, 10);
 let playerYaw = 0;
 let playerPitch = -0.08;
+let playerVelY = 0;
+let playerOnGround = true;
+let jumpHeld = false;
 let isPointerLocked = false;
 
 let neighbor = null;
+let neighborWife = null;
+let neighborSunbed = null;
 let neighborState = 'waiting';
 let neighborAnger = 0;
 let showingDialog = false;
@@ -235,6 +245,7 @@ async function init() {
   createFlowerBeds();
   createMailbox();
   createNeighbor();
+  createNeighborYard();
   createDog();
   createCat();
   createWife();
@@ -519,21 +530,38 @@ function createDeck() {
     deck.add(chair);
   });
 
-  // BBQ Grill
+  // BBQ grill sitting on the deck (legs down to the planks)
   const grillMat = new THREE.MeshLambertMaterial({ color: 0x2a2a2a });
+  const steelMat = new THREE.MeshLambertMaterial({ color: 0x7A7A7A });
   const grill = new THREE.Group();
-  
-  const grillBody = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.4, 0.35), grillMat);
-  grillBody.position.y = 0.6;
+
+  [[-0.16, -0.12], [0.16, -0.12], [-0.16, 0.12], [0.16, 0.12]].forEach(([gx, gz]) => {
+    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.028, 0.4, 6), grillMat);
+    leg.position.set(gx, 0.2, gz);
+    grill.add(leg);
+  });
+
+  const grillBody = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.26, 0.26, 12), grillMat);
+  grillBody.position.y = 0.5;
   grill.add(grillBody);
-  
-  const grillLid = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.25, 0.5, 8, 1, false, 0, Math.PI), grillMat);
-  grillLid.rotation.z = Math.PI / 2;
-  grillLid.rotation.y = Math.PI / 2;
-  grillLid.position.set(0, 0.85, 0);
+
+  const grate = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.24, 0.02, 12), steelMat);
+  grate.position.y = 0.64;
+  grill.add(grate);
+
+  const grillLid = new THREE.Mesh(
+    new THREE.SphereGeometry(0.26, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2),
+    grillMat
+  );
+  grillLid.position.y = 0.65;
   grill.add(grillLid);
-  
-  grill.position.set(1.8, 0.2, 1);
+
+  const lidHandle = new THREE.Mesh(new THREE.TorusGeometry(0.07, 0.012, 6, 10, Math.PI), steelMat);
+  lidHandle.rotation.x = Math.PI / 2;
+  lidHandle.position.set(0, 0.88, 0);
+  grill.add(lidHandle);
+
+  grill.position.set(1.8, 0.22, 1.15);
   deck.add(grill);
 
   deck.position.set(houseBounds.maxX + 2.8, 0, 2);
@@ -851,13 +879,13 @@ function createDog() {
   dog.userData.tail = tail;
 
   // Model faces +X; rotate so lookAt (which uses -Z) points the nose forward
-  model.rotation.y = Math.PI / 2;
+  model.rotation.y = -Math.PI / 2;
   dog.add(model);
   
   // Start in the yard, never inside the house
   dog.position.set(Math.min(FENCE_SIZE - 2, houseBounds.maxX + 2.5), 0, 8);
   dogTarget.copy(dog.position);
-  pushOutOfHouse(dog);
+  pushOutOfObstacles(dog);
   
   scene.add(dog);
 }
@@ -1473,45 +1501,6 @@ function isInHouseArea(x, z) {
   );
 }
 
-function pushOutOfHouse(obj) {
-  if (!obj || !isInHouseArea(obj.position.x, obj.position.z)) return;
-  const pad = 1.05;
-  const x = obj.position.x;
-  const z = obj.position.z;
-  const dist = {
-    minX: x - (houseBounds.minX - pad),
-    maxX: (houseBounds.maxX + pad) - x,
-    minZ: z - (houseBounds.minZ - pad),
-    maxZ: (houseBounds.maxZ + pad) - z,
-  };
-  const nearest = Object.keys(dist).reduce((a, b) => (dist[a] < dist[b] ? a : b));
-  if (nearest === 'minX') obj.position.x = houseBounds.minX - pad;
-  else if (nearest === 'maxX') obj.position.x = houseBounds.maxX + pad;
-  else if (nearest === 'minZ') obj.position.z = houseBounds.minZ - pad;
-  else obj.position.z = houseBounds.maxZ + pad;
-}
-
-function tryMoveAroundHouse(obj, dx, dz) {
-  const x = obj.position.x;
-  const z = obj.position.z;
-  const nx = x + dx;
-  const nz = z + dz;
-  if (!isInHouseArea(nx, nz)) {
-    obj.position.x = nx;
-    obj.position.z = nz;
-    return true;
-  }
-  if (!isInHouseArea(nx, z)) {
-    obj.position.x = nx;
-    return true;
-  }
-  if (!isInHouseArea(x, nz)) {
-    obj.position.z = nz;
-    return true;
-  }
-  return false;
-}
-
 function collectHouseMeshes() {
   houseMeshes = [];
   if (!house) return;
@@ -1636,6 +1625,75 @@ function isOnDeck(x, z) {
   return x > houseBounds.maxX + 0.2 && x < houseBounds.maxX + 6 && z > -1 && z < 5;
 }
 
+function isAnimalBlocked(x, z) {
+  return isInHouseArea(x, z) || isOnDeck(x, z);
+}
+
+function playerEyeGround(x, z) {
+  return EYE_HEIGHT + (isOnDeck(x, z) ? DECK_LIFT : 0);
+}
+
+function pushOutOfObstacles(obj) {
+  if (!obj) return;
+  if (isInHouseArea(obj.position.x, obj.position.z)) {
+    const pad = 1.05;
+    const x = obj.position.x;
+    const z = obj.position.z;
+    const dist = {
+      minX: x - (houseBounds.minX - pad),
+      maxX: (houseBounds.maxX + pad) - x,
+      minZ: z - (houseBounds.minZ - pad),
+      maxZ: (houseBounds.maxZ + pad) - z,
+    };
+    const nearest = Object.keys(dist).reduce((a, b) => (dist[a] < dist[b] ? a : b));
+    if (nearest === 'minX') obj.position.x = houseBounds.minX - pad;
+    else if (nearest === 'maxX') obj.position.x = houseBounds.maxX + pad;
+    else if (nearest === 'minZ') obj.position.z = houseBounds.minZ - pad;
+    else obj.position.z = houseBounds.maxZ + pad;
+  }
+  if (isOnDeck(obj.position.x, obj.position.z)) {
+    const minX = houseBounds.maxX + 0.2;
+    const maxX = houseBounds.maxX + 6;
+    const minZ = -1;
+    const maxZ = 5;
+    const x = obj.position.x;
+    const z = obj.position.z;
+    const dist = {
+      minX: x - minX,
+      maxX: maxX - x,
+      minZ: z - minZ,
+      maxZ: maxZ - z,
+    };
+    const nearest = Object.keys(dist).reduce((a, b) => (dist[a] < dist[b] ? a : b));
+    const extra = 0.25;
+    if (nearest === 'minX') obj.position.x = minX - extra;
+    else if (nearest === 'maxX') obj.position.x = maxX + extra;
+    else if (nearest === 'minZ') obj.position.z = minZ - extra;
+    else obj.position.z = maxZ + extra;
+  }
+}
+
+function tryMoveAroundHouse(obj, dx, dz) {
+  const x = obj.position.x;
+  const z = obj.position.z;
+  const nx = x + dx;
+  const nz = z + dz;
+  if (!isAnimalBlocked(nx, nz)) {
+    obj.position.x = nx;
+    obj.position.z = nz;
+    return true;
+  }
+  if (!isAnimalBlocked(nx, z)) {
+    obj.position.x = nx;
+    return true;
+  }
+  if (!isAnimalBlocked(x, nz)) {
+    obj.position.z = nz;
+    return true;
+  }
+  return false;
+}
+
 function createMower() {
   mower = mowerTemplate.clone(true);
   enableShadows(mower);
@@ -1751,9 +1809,151 @@ function createNeighbor() {
   neighbor.add(rightLeg);
   neighbor.userData.rightLeg = rightLeg;
 
-  neighbor.position.set(-FENCE_SIZE - 6, 0, 0);
-  neighbor.visible = false;
+  neighbor.position.set(-FENCE_SIZE - 5.2, 0, 5);
+  neighbor.visible = true;
   scene.add(neighbor);
+}
+
+const NEIGHBOR_SUNBED_POS = { x: -FENCE_SIZE - 5.2, z: 5.0 };
+
+function createSunbed() {
+  const bed = new THREE.Group();
+  const frameMat = new THREE.MeshLambertMaterial({ color: 0xC4A574 });
+  const fabricMat = new THREE.MeshLambertMaterial({ color: 0xE85D4C });
+  const pillowMat = new THREE.MeshLambertMaterial({ color: 0xF5E6D3 });
+
+  [[-0.28, -0.85], [0.28, -0.85], [-0.28, 0.85], [0.28, 0.85]].forEach(([x, z]) => {
+    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.32, 6), frameMat);
+    leg.position.set(x, 0.16, z);
+    bed.add(leg);
+  });
+
+  const frame = new THREE.Mesh(new THREE.BoxGeometry(0.72, 0.06, 1.9), frameMat);
+  frame.position.y = 0.34;
+  bed.add(frame);
+
+  const fabric = new THREE.Mesh(new THREE.BoxGeometry(0.64, 0.04, 1.8), fabricMat);
+  fabric.position.y = 0.38;
+  bed.add(fabric);
+
+  const rest = new THREE.Mesh(new THREE.BoxGeometry(0.64, 0.08, 0.45), fabricMat);
+  rest.position.set(0, 0.48, -0.72);
+  rest.rotation.x = -0.45;
+  bed.add(rest);
+
+  const pillow = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.08, 0.28), pillowMat);
+  pillow.position.set(0, 0.58, -0.7);
+  pillow.rotation.x = -0.4;
+  bed.add(pillow);
+
+  return bed;
+}
+
+function createNeighborWife() {
+  neighborWife = new THREE.Group();
+  const skinMat = new THREE.MeshLambertMaterial({ color: 0xE8C4A8 });
+  const hairMat = new THREE.MeshLambertMaterial({ color: 0xD4A017 });
+  const dressMat = new THREE.MeshLambertMaterial({ color: 0xE27D60 });
+  const shoeMat = new THREE.MeshLambertMaterial({ color: 0x5C3317 });
+
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.2, 12, 10), skinMat);
+  head.position.y = 1.5;
+  head.scale.set(0.9, 1, 0.85);
+  head.castShadow = true;
+  neighborWife.add(head);
+
+  const hairTop = new THREE.Mesh(new THREE.SphereGeometry(0.22, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.55), hairMat);
+  hairTop.position.y = 1.55;
+  neighborWife.add(hairTop);
+
+  const bun = new THREE.Mesh(new THREE.SphereGeometry(0.1, 8, 6), hairMat);
+  bun.position.set(0, 1.62, -0.12);
+  neighborWife.add(bun);
+
+  [-0.07, 0.07].forEach((x) => {
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.03, 6, 4), new THREE.MeshLambertMaterial({ color: 0x4A3728 }));
+    eye.position.set(x, 1.52, 0.16);
+    neighborWife.add(eye);
+  });
+
+  const dress = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.26, 0.75, 12), dressMat);
+  dress.position.y = 0.92;
+  dress.castShadow = true;
+  neighborWife.add(dress);
+
+  const armGeo = new THREE.CylinderGeometry(0.04, 0.045, 0.35, 8);
+  const leftArm = new THREE.Group();
+  leftArm.position.set(-0.22, 1.15, 0);
+  leftArm.add(new THREE.Mesh(armGeo, skinMat));
+  neighborWife.add(leftArm);
+  neighborWife.userData.leftArm = leftArm;
+
+  const rightArm = new THREE.Group();
+  rightArm.position.set(0.22, 1.15, 0);
+  rightArm.add(new THREE.Mesh(armGeo, skinMat));
+  neighborWife.add(rightArm);
+  neighborWife.userData.rightArm = rightArm;
+
+  const legGeo = new THREE.CylinderGeometry(0.05, 0.05, 0.4, 8);
+  [-0.08, 0.08].forEach((x) => {
+    const leg = new THREE.Group();
+    leg.position.set(x, 0.4, 0);
+    leg.add(new THREE.Mesh(legGeo, skinMat));
+    const shoe = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.05, 0.12), shoeMat);
+    shoe.position.y = -0.22;
+    leg.add(shoe);
+    neighborWife.add(leg);
+  });
+
+  neighborWife.position.set(-FENCE_SIZE - 4.2, 0, -2.4);
+  neighborWife.rotation.y = Math.atan2(
+    0 - neighborWife.position.x,
+    0 - neighborWife.position.z
+  );
+  scene.add(neighborWife);
+}
+
+function createNeighborYard() {
+  neighborSunbed = createSunbed();
+  neighborSunbed.position.set(NEIGHBOR_SUNBED_POS.x, 0, NEIGHBOR_SUNBED_POS.z);
+  neighborSunbed.rotation.y = 0.15;
+  scene.add(neighborSunbed);
+
+  createNeighborWife();
+  setNeighborLounging();
+}
+
+function setNeighborLounging() {
+  if (!neighbor) return;
+  neighbor.visible = true;
+  neighbor.position.set(NEIGHBOR_SUNBED_POS.x, 0.42, NEIGHBOR_SUNBED_POS.z + 0.55);
+  neighbor.rotation.set(-Math.PI / 2, 0.15, 0);
+  neighbor.userData.leftArm.rotation.set(-2.35, 0, 0.2);
+  neighbor.userData.rightArm.rotation.set(-2.35, 0, -0.2);
+  neighbor.userData.leftLeg.rotation.set(0.12, 0, 0);
+  neighbor.userData.rightLeg.rotation.set(0.22, 0, 0);
+}
+
+function setNeighborStanding() {
+  if (!neighbor) return;
+  neighbor.rotation.set(0, 0, 0);
+  neighbor.position.y = 0;
+  neighbor.userData.leftArm.rotation.set(0, 0, 0);
+  neighbor.userData.rightArm.rotation.set(0, 0, 0);
+  neighbor.userData.leftLeg.rotation.set(0, 0, 0);
+  neighbor.userData.rightLeg.rotation.set(0, 0, 0);
+}
+
+function updateNeighborWife(time) {
+  if (!neighborWife) return;
+  neighborWife.rotation.y = Math.atan2(
+    0 - neighborWife.position.x,
+    0 - neighborWife.position.z
+  );
+  neighborWife.userData.rightArm.rotation.x = -0.85;
+  neighborWife.userData.rightArm.rotation.z = 0.35;
+  neighborWife.userData.leftArm.rotation.z = 0.12;
+  neighborWife.position.y = Math.sin(time * 1.2) * 0.008;
 }
 
 function initAudio() {
@@ -2144,6 +2344,7 @@ function setupControls() {
     
     if (e.code === 'Space' && showingDialog) {
       hideDialog();
+      jumpHeld = true;
       if (neighborState === 'approaching') neighborState = 'fighting';
     }
   });
@@ -2246,9 +2447,12 @@ function restartGame() {
   setMusicVolume(0.14);
   
   // Reset player
-  playerPos.set(-6, 1.5, 10);
+  playerPos.set(-6, EYE_HEIGHT, 10);
   playerYaw = 0;
   playerPitch = -0.08;
+  playerVelY = 0;
+  playerOnGround = true;
+  jumpHeld = false;
   playerHealth = 100;
   completed = false;
   
@@ -2256,8 +2460,7 @@ function restartGame() {
   neighborState = 'waiting';
   neighborAnger = 0;
   isPunching = false;
-  neighbor.visible = false;
-  neighbor.position.set(-FENCE_SIZE - 6, 0, 0);
+  setNeighborLounging();
   
   // Reset dog
   if (dog) {
@@ -2274,7 +2477,7 @@ function restartGame() {
   catMeowCooldown = 0;
   if (cat) {
     cat.position.set(2.6, 0, houseBounds.maxZ + 1.4);
-    pushOutOfHouse(cat);
+    pushOutOfObstacles(cat);
   }
   
   // Reset wife
@@ -2293,7 +2496,7 @@ function restartGame() {
   
   // Reset HUD
   document.getElementById('grass-display').innerHTML = '🌿 Græs slået: <span id="grass-percent">0</span>%';
-  document.getElementById('controls-hint').textContent = '⌨️ WASD + Mus';
+  document.getElementById('controls-hint').textContent = '⌨️ WASD + Space';
   document.querySelector('.modal-content h2').textContent = '🎉 Græsset er slået!';
   document.getElementById('restart-btn').textContent = '🔄 Ny dag';
   document.getElementById('restart-btn').onclick = restartGame;
@@ -2315,11 +2518,16 @@ function updateNeighbor() {
   const mowed = grassBlades.filter(b => !b.isTall).length;
   const percent = (mowed / totalGrass) * 100;
 
+  if (neighborState === 'waiting' || neighborState === 'defeated') {
+    neighbor.userData.leftArm.rotation.x = -2.35 + Math.sin(time * 1.3) * 0.04;
+    neighbor.userData.rightArm.rotation.x = -2.35 + Math.sin(time * 1.3 + 0.5) * 0.04;
+  }
+
   if (neighborState === 'waiting' && percent > 25) {
     neighborState = 'walking_to_gate';
+    setNeighborStanding();
     neighbor.visible = true;
-    // Start outside the fence, will walk to gate
-    neighbor.position.set(-FENCE_SIZE - 4, 0, 0);
+    neighbor.position.set(NEIGHBOR_SUNBED_POS.x, 0, NEIGHBOR_SUNBED_POS.z);
     setMusicVolume(0.05);
     shoutNeighbor('HEY! Kan du ikke stoppe den larm? Det er søndag formiddag!');
     showDialog('SUR NABO', 'HEY! Kan du ikke stoppe den larm?! Det er søndag formiddag!');
@@ -2480,7 +2688,7 @@ function updateNeighbor() {
     neighbor.userData.rightLeg.rotation.x = -walkCycle;
 
     if (neighbor.position.x < -FENCE_SIZE - 2) {
-      neighbor.visible = false;
+      setNeighborLounging();
       neighborState = 'defeated';
       setMusicVolume(0.14);
       if (window.speechSynthesis) window.speechSynthesis.cancel();
@@ -2516,10 +2724,28 @@ function update() {
     const newX = playerPos.x + moveDir.x * PLAYER_SPEED;
     const newZ = playerPos.z + moveDir.z * PLAYER_SPEED;
 
-    if (!isInHouseArea(newX, newZ) && !isOnDeck(newX, newZ)) {
-      playerPos.x = Math.max(-FENCE_SIZE + 0.7, Math.min(FENCE_SIZE - 0.7, newX));
-      playerPos.z = Math.max(-FENCE_SIZE + 0.7, Math.min(FENCE_SIZE - 0.7, newZ));
+    if (!isInHouseArea(newX, newZ)) {
+      const nextEye = playerEyeGround(newX, newZ);
+      if (playerPos.y >= nextEye - 0.14) {
+        playerPos.x = Math.max(-FENCE_SIZE + 0.7, Math.min(FENCE_SIZE - 0.7, newX));
+        playerPos.z = Math.max(-FENCE_SIZE + 0.7, Math.min(FENCE_SIZE - 0.7, newZ));
+      }
     }
+  }
+
+  if (keys.space && !jumpHeld && playerOnGround && !showingDialog) {
+    playerVelY = JUMP_SPEED;
+    playerOnGround = false;
+  }
+  jumpHeld = keys.space;
+
+  playerVelY -= GRAVITY;
+  playerPos.y += playerVelY;
+  const groundY = playerEyeGround(playerPos.x, playerPos.z);
+  if (playerPos.y <= groundY && playerVelY <= 0) {
+    playerPos.y = groundY;
+    playerVelY = 0;
+    playerOnGround = true;
   }
 
   if (isMoving && currentLevel === 1) {
@@ -2557,7 +2783,7 @@ function update() {
   mower.rotation.y = playerYaw + Math.PI;
 
   if (playerModel) {
-    playerModel.position.set(playerPos.x, playerFootOffset, playerPos.z);
+    playerModel.position.set(playerPos.x, playerFootOffset + (playerPos.y - EYE_HEIGHT), playerPos.z);
     playerModel.rotation.y = playerYaw;
   }
   if (playerMixer) playerMixer.update(dt);
@@ -2575,6 +2801,7 @@ function update() {
   // Grass sway animation is now handled by wind via shader (instanced mesh optimization)
 
   updateNeighbor();
+  updateNeighborWife(clock.getElapsedTime());
   updateDog();
   updateCat();
   updateWife();
@@ -2600,10 +2827,10 @@ function pickYardTarget() {
     newX = (Math.random() - 0.5) * (FENCE_SIZE - 2) * 2;
     newZ = (Math.random() - 0.5) * (FENCE_SIZE - 2) * 2;
     tries++;
-  } while ((isInHouseArea(newX, newZ) || isOnDeck(newX, newZ)) && tries < 20);
-  if (isInHouseArea(newX, newZ)) {
-    newX = houseBounds.maxX + 2.2;
-    newZ = houseBounds.maxZ + 2.2;
+  } while (isAnimalBlocked(newX, newZ) && tries < 20);
+  if (isAnimalBlocked(newX, newZ)) {
+    newX = -FENCE_SIZE + 3;
+    newZ = FENCE_SIZE - 3;
   }
   return { x: newX, z: newZ };
 }
@@ -2612,7 +2839,7 @@ function updateDog() {
   if (!dog) return;
   
   const time = clock.getElapsedTime();
-  pushOutOfHouse(dog);
+  pushOutOfObstacles(dog);
   
   // Check if player is too close - run away!
   const distToPlayer = dog.position.distanceTo(playerPos);
@@ -2631,8 +2858,8 @@ function updateDog() {
     newX = Math.max(-FENCE_SIZE + 1, Math.min(FENCE_SIZE - 1, newX));
     newZ = Math.max(-FENCE_SIZE + 1, Math.min(FENCE_SIZE - 1, newZ));
     
-    // Avoid house — don't run through walls
-    if (isInHouseArea(newX, newZ)) {
+    // Avoid house and terrace
+    if (isAnimalBlocked(newX, newZ)) {
       const around = pickYardTarget();
       newX = around.x;
       newZ = around.z;
@@ -2678,12 +2905,19 @@ function updateDog() {
     dir.normalize();
     const running = distToPlayer < 3.5;
     const speed = running ? 0.07 : 0.045;
+    const prevX = dog.position.x;
+    const prevZ = dog.position.z;
     const moved = tryMoveAroundHouse(dog, dir.x * speed, dir.z * speed);
     if (!moved) {
       const around = pickYardTarget();
       dogTarget.set(around.x, 0, around.z);
+    } else {
+      const mx = dog.position.x - prevX;
+      const mz = dog.position.z - prevZ;
+      if (mx * mx + mz * mz > 0.00001) {
+        dog.lookAt(dog.position.x + mx, dog.position.y, dog.position.z + mz);
+      }
     }
-    dog.lookAt(dog.position.x + dir.x, dog.position.y, dog.position.z + dir.z);
     
     // Trot: opposite legs move together
     const walkCycle = Math.sin(time * (running ? 16 : 11));
@@ -2730,7 +2964,7 @@ function updateDog() {
 
 function updateCat() {
   if (!cat) return;
-  pushOutOfHouse(cat);
+  pushOutOfObstacles(cat);
   
   // Cat just lies there, but meows if player comes close
   if (catMeowCooldown > 0) {
@@ -3041,7 +3275,7 @@ function startLevel2() {
   createFirstPersonPaintbrush();
   
   document.getElementById('grass-display').innerHTML = '🎨 Malet: <span id="grass-percent">0</span>%';
-  document.getElementById('controls-hint').textContent = '🎨 Hold musen nede';
+  document.getElementById('controls-hint').textContent = '🎨 Hold musen nede · Space = hop';
   const crosshair = document.getElementById('paint-crosshair');
   if (crosshair) crosshair.classList.remove('hidden');
   
