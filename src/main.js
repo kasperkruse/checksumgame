@@ -39,6 +39,10 @@ let isPointerLocked = false;
 let neighbor = null;
 let neighborWife = null;
 let neighborSunbed = null;
+let neighborPoodle = null;
+let neighborHouseBounds = { minX: -30, maxX: -22, minZ: -6, maxZ: 2 };
+let neighborPoodleTarget = new THREE.Vector3();
+let neighborPoodleWait = 0;
 let neighborState = 'waiting';
 let neighborAnger = 0;
 let showingDialog = false;
@@ -93,12 +97,20 @@ let lastPaintAt = 0;
 let lastSplatPoint = null;
 let roofBirds = [];
 const PAINT_REWARD = 150;
-const PAINT_CELL = 0.48;
+const PAINT_CELL = 0.32;
 const PAINT_RANGE = 4.0;
 const PAINT_COLOR = 0xF4F1EA;
 
 // Yard size (15% smaller than 14 = ~12)
 const FENCE_SIZE = 12;
+
+const NEIGHBOR_FENCE = {
+  minX: -33,
+  maxX: -13.2,
+  minZ: -9.5,
+  maxZ: 9.5,
+};
+const NEIGHBOR_SUNBED_POS = { x: -FENCE_SIZE - 5.2, z: 5.0 };
 
 const keys = { w: false, a: false, s: false, d: false, space: false };
 
@@ -246,6 +258,8 @@ async function init() {
   createMailbox();
   createNeighbor();
   createNeighborYard();
+  createNeighborFence();
+  createNeighborPoodle();
   createDog();
   createCat();
   createWife();
@@ -432,9 +446,34 @@ function createNeighborHouse() {
   const neighborHouse = window._neighborGltf.scene.clone(true);
   neighborHouse.scale.setScalar(4.2);
   neighborHouse.position.set(-26, 0, -2);
+  weatherNeighborHouse(neighborHouse);
   enableShadows(neighborHouse);
   scene.add(neighborHouse);
-  groundModel(neighborHouse);
+  const grounded = groundModel(neighborHouse);
+  neighborHouseBounds = {
+    minX: grounded.min.x,
+    maxX: grounded.max.x,
+    minZ: grounded.min.z,
+    maxZ: grounded.max.z,
+  };
+}
+
+function weatherNeighborHouse(root) {
+  root.traverse((obj) => {
+    if (!obj.isMesh || !obj.material) return;
+    const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+    const weathered = mats.map((mat) => {
+      const m = mat.clone();
+      if (m.color) {
+        m.color.offsetHSL(0.03, -0.25, -0.14);
+        m.color.lerp(new THREE.Color(0x6A5A42), 0.32);
+      }
+      if ('roughness' in m) m.roughness = 0.96;
+      if ('metalness' in m) m.metalness = 0;
+      return m;
+    });
+    obj.material = Array.isArray(obj.material) ? weathered : weathered[0];
+  });
 }
 
 function createPlayerCharacter() {
@@ -1706,115 +1745,117 @@ function createMower() {
 
 function createNeighbor() {
   neighbor = new THREE.Group();
+  neighbor.scale.set(1, 0.92, 1.02);
 
-  // Head
-  const headGeo = new THREE.SphereGeometry(0.25, 16, 12);
-  const headMat = new THREE.MeshLambertMaterial({ color: COLORS.neighborSkin });
-  const head = new THREE.Mesh(headGeo, headMat);
-  head.position.y = 1.55;
-  head.scale.set(1, 1.1, 0.95);
+  const headMat = new THREE.MeshLambertMaterial({ color: 0xC4A07A });
+  const hairMat = new THREE.MeshLambertMaterial({ color: 0xD8D4C8 });
+  const shirtMat = new THREE.MeshLambertMaterial({ color: 0x8A7A58 });
+  const pantsMat = new THREE.MeshLambertMaterial({ color: 0x3F3A32 });
+  const shoeMat = new THREE.MeshLambertMaterial({ color: 0x2A2218 });
+  const rimMat = new THREE.MeshLambertMaterial({ color: 0x2C2C2C });
+
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.24, 16, 12), headMat);
+  head.position.y = 1.5;
+  head.scale.set(1, 1.05, 0.95);
   head.castShadow = true;
   neighbor.add(head);
 
-  // Hair
-  const hairGeo = new THREE.SphereGeometry(0.26, 16, 8, 0, Math.PI * 2, 0, Math.PI * 0.4);
-  const hairMat = new THREE.MeshLambertMaterial({ color: 0x2D2D2D });
-  const hair = new THREE.Mesh(hairGeo, hairMat);
-  hair.position.y = 1.6;
-  neighbor.add(hair);
+  // Bald crown with a grey fringe
+  const bald = new THREE.Mesh(new THREE.SphereGeometry(0.2, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.42), headMat);
+  bald.position.y = 1.62;
+  neighbor.add(bald);
 
-  // Eyes
-  const eyeWhiteMat = new THREE.MeshLambertMaterial({ color: 0xFFFFFF });
-  const eyePupilMat = new THREE.MeshLambertMaterial({ color: 0x000000 });
-  
-  [-0.08, 0.08].forEach(x => {
-    const eyeWhite = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 6), eyeWhiteMat);
-    eyeWhite.position.set(x, 1.58, 0.2);
-    eyeWhite.scale.set(0.8, 1, 0.5);
+  const fringe = new THREE.Mesh(new THREE.TorusGeometry(0.18, 0.055, 8, 16, Math.PI * 1.35), hairMat);
+  fringe.position.set(0, 1.54, -0.02);
+  fringe.rotation.x = Math.PI / 2.15;
+  fringe.rotation.z = Math.PI * 0.12;
+  neighbor.add(fringe);
+
+  const eyeWhiteMat = new THREE.MeshLambertMaterial({ color: 0xFFF6E8 });
+  const eyePupilMat = new THREE.MeshLambertMaterial({ color: 0x3A2A1A });
+  [-0.08, 0.08].forEach((x) => {
+    const eyeWhite = new THREE.Mesh(new THREE.SphereGeometry(0.045, 8, 6), eyeWhiteMat);
+    eyeWhite.position.set(x, 1.52, 0.2);
+    eyeWhite.scale.set(0.8, 0.85, 0.45);
     neighbor.add(eyeWhite);
-
-    const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.025, 6, 4), eyePupilMat);
-    pupil.position.set(x, 1.58, 0.23);
+    const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.02, 6, 4), eyePupilMat);
+    pupil.position.set(x, 1.515, 0.23);
     neighbor.add(pupil);
   });
 
-  // Angry eyebrows
-  const eyebrowMat = new THREE.MeshLambertMaterial({ color: 0x2D2D2D });
+  const eyebrowMat = new THREE.MeshLambertMaterial({ color: 0xB8B4A8 });
   neighbor.userData.eyebrows = [];
   [-0.08, 0.08].forEach((x, i) => {
-    const eyebrow = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.02, 0.02), eyebrowMat);
-    eyebrow.position.set(x, 1.68, 0.2);
-    eyebrow.rotation.z = i === 0 ? -0.4 : 0.4;
+    const eyebrow = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.018, 0.02), eyebrowMat);
+    eyebrow.position.set(x, 1.61, 0.2);
+    eyebrow.rotation.z = i === 0 ? -0.45 : 0.45;
     neighbor.add(eyebrow);
     neighbor.userData.eyebrows.push(eyebrow);
   });
 
-  // Mouth
-  const mouthGeo = new THREE.BoxGeometry(0.1, 0.03, 0.02);
-  const mouthMat = new THREE.MeshLambertMaterial({ color: 0x8B4513 });
-  const mouth = new THREE.Mesh(mouthGeo, mouthMat);
-  mouth.position.set(0, 1.42, 0.22);
+  [-0.08, 0.08].forEach((x) => {
+    const lens = new THREE.Mesh(new THREE.TorusGeometry(0.055, 0.008, 6, 12), rimMat);
+    lens.position.set(x, 1.52, 0.24);
+    neighbor.add(lens);
+  });
+  const bridge = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.01, 0.01), rimMat);
+  bridge.position.set(0, 1.52, 0.24);
+  neighbor.add(bridge);
+
+  const mouth = new THREE.Mesh(
+    new THREE.BoxGeometry(0.09, 0.025, 0.02),
+    new THREE.MeshLambertMaterial({ color: 0x7A4A3A })
+  );
+  mouth.position.set(0, 1.38, 0.21);
   neighbor.add(mouth);
 
-  // Torso (red shirt)
-  const torsoGeo = new THREE.CylinderGeometry(0.2, 0.25, 0.55, 12);
-  const torsoMat = new THREE.MeshLambertMaterial({ color: COLORS.neighborShirt });
-  const torso = new THREE.Mesh(torsoGeo, torsoMat);
-  torso.position.y = 1.1;
+  const torso = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.26, 0.58, 12), shirtMat);
+  torso.position.y = 1.05;
   torso.castShadow = true;
   neighbor.add(torso);
 
-  // Arms
-  const armGeo = new THREE.CylinderGeometry(0.05, 0.06, 0.45, 8);
-  const armMat = new THREE.MeshLambertMaterial({ color: COLORS.neighborShirt });
-  
+  const armGeo = new THREE.CylinderGeometry(0.05, 0.055, 0.42, 8);
   const leftArm = new THREE.Group();
-  leftArm.position.set(-0.28, 1.15, 0);
-  leftArm.add(new THREE.Mesh(armGeo, armMat));
-  const leftFist = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 6), headMat);
-  leftFist.position.y = -0.28;
+  leftArm.position.set(-0.28, 1.12, 0);
+  leftArm.add(new THREE.Mesh(armGeo, shirtMat));
+  const leftFist = new THREE.Mesh(new THREE.SphereGeometry(0.065, 8, 6), headMat);
+  leftFist.position.y = -0.26;
   leftArm.add(leftFist);
   neighbor.add(leftArm);
   neighbor.userData.leftArm = leftArm;
 
   const rightArm = new THREE.Group();
-  rightArm.position.set(0.28, 1.15, 0);
-  rightArm.add(new THREE.Mesh(armGeo, armMat));
-  const rightFist = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 6), headMat);
-  rightFist.position.y = -0.28;
+  rightArm.position.set(0.28, 1.12, 0);
+  rightArm.add(new THREE.Mesh(armGeo, shirtMat));
+  const rightFist = new THREE.Mesh(new THREE.SphereGeometry(0.065, 8, 6), headMat);
+  rightFist.position.y = -0.26;
   rightArm.add(rightFist);
   neighbor.add(rightArm);
   neighbor.userData.rightArm = rightArm;
 
-  // Legs
-  const legGeo = new THREE.CylinderGeometry(0.07, 0.08, 0.5, 8);
-  const legMat = new THREE.MeshLambertMaterial({ color: COLORS.neighborPants });
-  const shoeMat = new THREE.MeshLambertMaterial({ color: 0x1A1A1A });
-
+  const legGeo = new THREE.CylinderGeometry(0.07, 0.075, 0.48, 8);
   const leftLeg = new THREE.Group();
-  leftLeg.position.set(-0.1, 0.55, 0);
-  leftLeg.add(new THREE.Mesh(legGeo, legMat));
-  const leftShoe = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.08, 0.2), shoeMat);
-  leftShoe.position.set(0, -0.28, 0.04);
+  leftLeg.position.set(-0.1, 0.52, 0);
+  leftLeg.add(new THREE.Mesh(legGeo, pantsMat));
+  const leftShoe = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.07, 0.2), shoeMat);
+  leftShoe.position.set(0, -0.26, 0.04);
   leftLeg.add(leftShoe);
   neighbor.add(leftLeg);
   neighbor.userData.leftLeg = leftLeg;
 
   const rightLeg = new THREE.Group();
-  rightLeg.position.set(0.1, 0.55, 0);
-  rightLeg.add(new THREE.Mesh(legGeo, legMat));
-  const rightShoe = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.08, 0.2), shoeMat);
-  rightShoe.position.set(0, -0.28, 0.04);
+  rightLeg.position.set(0.1, 0.52, 0);
+  rightLeg.add(new THREE.Mesh(legGeo, pantsMat));
+  const rightShoe = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.07, 0.2), shoeMat);
+  rightShoe.position.set(0, -0.26, 0.04);
   rightLeg.add(rightShoe);
   neighbor.add(rightLeg);
   neighbor.userData.rightLeg = rightLeg;
 
-  neighbor.position.set(-FENCE_SIZE - 5.2, 0, 5);
+  neighbor.position.set(NEIGHBOR_SUNBED_POS.x, 0, NEIGHBOR_SUNBED_POS.z);
   neighbor.visible = true;
   scene.add(neighbor);
 }
-
-const NEIGHBOR_SUNBED_POS = { x: -FENCE_SIZE - 5.2, z: 5.0 };
 
 function createSunbed() {
   const bed = new THREE.Group();
@@ -1851,65 +1892,77 @@ function createSunbed() {
 
 function createNeighborWife() {
   neighborWife = new THREE.Group();
-  const skinMat = new THREE.MeshLambertMaterial({ color: 0xE8C4A8 });
-  const hairMat = new THREE.MeshLambertMaterial({ color: 0xD4A017 });
-  const dressMat = new THREE.MeshLambertMaterial({ color: 0xE27D60 });
-  const shoeMat = new THREE.MeshLambertMaterial({ color: 0x5C3317 });
+  const skinMat = new THREE.MeshLambertMaterial({ color: 0xD4B08A });
+  const hairMat = new THREE.MeshLambertMaterial({ color: 0xC8C2B4 });
+  const dressMat = new THREE.MeshLambertMaterial({ color: 0x6B4E71 });
+  const shoeMat = new THREE.MeshLambertMaterial({ color: 0x3A2A1A });
+  const browMat = new THREE.MeshLambertMaterial({ color: 0x8A8070 });
 
   const head = new THREE.Mesh(new THREE.SphereGeometry(0.2, 12, 10), skinMat);
-  head.position.y = 1.5;
-  head.scale.set(0.9, 1, 0.85);
+  head.position.y = 1.48;
+  head.scale.set(0.92, 1, 0.88);
   head.castShadow = true;
   neighborWife.add(head);
 
-  const hairTop = new THREE.Mesh(new THREE.SphereGeometry(0.22, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.55), hairMat);
-  hairTop.position.y = 1.55;
+  const hairTop = new THREE.Mesh(new THREE.SphereGeometry(0.21, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.55), hairMat);
+  hairTop.position.y = 1.53;
   neighborWife.add(hairTop);
 
   const bun = new THREE.Mesh(new THREE.SphereGeometry(0.1, 8, 6), hairMat);
-  bun.position.set(0, 1.62, -0.12);
+  bun.position.set(0, 1.58, -0.12);
   neighborWife.add(bun);
 
   [-0.07, 0.07].forEach((x) => {
-    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.03, 6, 4), new THREE.MeshLambertMaterial({ color: 0x4A3728 }));
-    eye.position.set(x, 1.52, 0.16);
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.028, 6, 4), new THREE.MeshLambertMaterial({ color: 0x3A2A1A }));
+    eye.position.set(x, 1.5, 0.16);
     neighborWife.add(eye);
   });
 
-  const dress = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.26, 0.75, 12), dressMat);
-  dress.position.y = 0.92;
+  [-0.07, 0.07].forEach((x, i) => {
+    const brow = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.016, 0.02), browMat);
+    brow.position.set(x, 1.58, 0.16);
+    brow.rotation.z = i === 0 ? 0.45 : -0.45;
+    neighborWife.add(brow);
+  });
+
+  const frown = new THREE.Mesh(
+    new THREE.TorusGeometry(0.045, 0.01, 6, 8, Math.PI),
+    new THREE.MeshLambertMaterial({ color: 0x8B4A3A })
+  );
+  frown.position.set(0, 1.38, 0.16);
+  frown.rotation.x = 0;
+  neighborWife.add(frown);
+
+  const dress = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.28, 0.78, 12), dressMat);
+  dress.position.y = 0.9;
   dress.castShadow = true;
   neighborWife.add(dress);
 
-  const armGeo = new THREE.CylinderGeometry(0.04, 0.045, 0.35, 8);
+  const armGeo = new THREE.CylinderGeometry(0.04, 0.045, 0.34, 8);
   const leftArm = new THREE.Group();
-  leftArm.position.set(-0.22, 1.15, 0);
+  leftArm.position.set(-0.18, 1.05, 0.02);
   leftArm.add(new THREE.Mesh(armGeo, skinMat));
   neighborWife.add(leftArm);
   neighborWife.userData.leftArm = leftArm;
 
   const rightArm = new THREE.Group();
-  rightArm.position.set(0.22, 1.15, 0);
+  rightArm.position.set(0.18, 1.05, 0.02);
   rightArm.add(new THREE.Mesh(armGeo, skinMat));
   neighborWife.add(rightArm);
   neighborWife.userData.rightArm = rightArm;
 
-  const legGeo = new THREE.CylinderGeometry(0.05, 0.05, 0.4, 8);
+  const legGeo = new THREE.CylinderGeometry(0.05, 0.05, 0.38, 8);
   [-0.08, 0.08].forEach((x) => {
     const leg = new THREE.Group();
-    leg.position.set(x, 0.4, 0);
+    leg.position.set(x, 0.38, 0);
     leg.add(new THREE.Mesh(legGeo, skinMat));
     const shoe = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.05, 0.12), shoeMat);
-    shoe.position.y = -0.22;
+    shoe.position.y = -0.2;
     leg.add(shoe);
     neighborWife.add(leg);
   });
 
-  neighborWife.position.set(-FENCE_SIZE - 4.2, 0, -2.4);
-  neighborWife.rotation.y = Math.atan2(
-    0 - neighborWife.position.x,
-    0 - neighborWife.position.z
-  );
+  neighborWife.position.set(-FENCE_SIZE - 4.4, 0, -1.6);
   scene.add(neighborWife);
 }
 
@@ -1921,6 +1974,219 @@ function createNeighborYard() {
 
   createNeighborWife();
   setNeighborLounging();
+}
+
+function createNeighborFence() {
+  const fenceMat = new THREE.MeshLambertMaterial({ color: 0x8A7B63 });
+  const postMat = new THREE.MeshLambertMaterial({ color: 0x6E6250 });
+  const { minX, maxX, minZ, maxZ } = NEIGHBOR_FENCE;
+  const spacing = 0.22;
+
+  const addPicket = (x, z, rotY = 0) => {
+    if (Math.random() < 0.06) return; // missing/broken pickets
+    const picket = new THREE.Group();
+    const h = 0.95 + Math.random() * 0.18;
+    const post = new THREE.Mesh(new THREE.BoxGeometry(0.08, h, 0.022), fenceMat);
+    post.position.y = h * 0.5;
+    post.rotation.z = (Math.random() - 0.5) * 0.12;
+    picket.add(post);
+    const point = new THREE.Mesh(new THREE.ConeGeometry(0.055, 0.14, 4), fenceMat);
+    point.position.y = h + 0.05;
+    point.rotation.y = Math.PI / 4;
+    picket.add(point);
+    picket.position.set(x, 0, z);
+    picket.rotation.y = rotY + (Math.random() - 0.5) * 0.08;
+    scene.add(picket);
+  };
+
+  for (let x = minX; x <= maxX; x += spacing) {
+    addPicket(x, minZ);
+    addPicket(x, maxZ);
+  }
+  for (let z = minZ; z <= maxZ; z += spacing) {
+    addPicket(minX, z);
+    if (z > -1.2 && z < 1.2) continue; // gate toward our yard
+    addPicket(maxX, z);
+  }
+
+  const railMat = fenceMat;
+  const xLen = maxX - minX;
+  const zLen = maxZ - minZ;
+  [0.28, 0.68].forEach((y) => {
+    const front = new THREE.Mesh(new THREE.BoxGeometry(xLen, 0.06, 0.035), railMat);
+    front.position.set((minX + maxX) / 2, y, minZ);
+    scene.add(front);
+    const back = new THREE.Mesh(new THREE.BoxGeometry(xLen, 0.06, 0.035), railMat);
+    back.position.set((minX + maxX) / 2, y, maxZ);
+    scene.add(back);
+    const west = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.06, zLen), railMat);
+    west.position.set(minX, y, (minZ + maxZ) / 2);
+    scene.add(west);
+    const eastLen = (zLen / 2) - 1.2;
+    const eastN = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.06, eastLen), railMat);
+    eastN.position.set(maxX, y, minZ + eastLen / 2);
+    scene.add(eastN);
+    const eastS = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.06, eastLen), railMat);
+    eastS.position.set(maxX, y, maxZ - eastLen / 2);
+    scene.add(eastS);
+  });
+
+  [[minX, minZ], [minX, maxZ], [maxX, minZ], [maxX, maxZ], [maxX, 1.2], [maxX, -1.2]].forEach(([x, z]) => {
+    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.1, 1.25, 8), postMat);
+    post.position.set(x, 0.62, z);
+    scene.add(post);
+  });
+}
+
+function isInNeighborHouse(x, z) {
+  const pad = 0.9;
+  return (
+    x > neighborHouseBounds.minX - pad &&
+    x < neighborHouseBounds.maxX + pad &&
+    z > neighborHouseBounds.minZ - pad &&
+    z < neighborHouseBounds.maxZ + pad
+  );
+}
+
+function createNeighborPoodle() {
+  neighborPoodle = new THREE.Group();
+  const model = new THREE.Group();
+  const fluff = new THREE.MeshLambertMaterial({ color: 0xF2EDE4 });
+  const dirty = new THREE.MeshLambertMaterial({ color: 0xD9D0C0 });
+  const noseMat = new THREE.MeshLambertMaterial({ color: 0x1a1a1a });
+  const eyeMat = new THREE.MeshLambertMaterial({ color: 0x2a2a2a });
+
+  const body = new THREE.Mesh(new THREE.SphereGeometry(0.13, 8, 6), fluff);
+  body.scale.set(1.35, 1, 1);
+  body.position.set(0, 0.2, 0);
+  body.castShadow = true;
+  model.add(body);
+
+  const extra = new THREE.Mesh(new THREE.SphereGeometry(0.09, 7, 5), dirty);
+  extra.position.set(-0.02, 0.22, 0.06);
+  extra.scale.set(1.1, 0.8, 0.9);
+  model.add(extra);
+
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.11, 8, 6), fluff);
+  head.position.set(0.16, 0.28, 0);
+  model.add(head);
+
+  const topknot = new THREE.Mesh(new THREE.SphereGeometry(0.07, 7, 5), fluff);
+  topknot.position.set(0.16, 0.38, 0);
+  topknot.scale.set(1.1, 0.9, 1.05);
+  model.add(topknot);
+
+  const snout = new THREE.Mesh(new THREE.SphereGeometry(0.045, 6, 5), dirty);
+  snout.position.set(0.24, 0.24, 0);
+  snout.scale.set(1.2, 0.7, 0.8);
+  model.add(snout);
+
+  const nose = new THREE.Mesh(new THREE.SphereGeometry(0.02, 5, 4), noseMat);
+  nose.position.set(0.29, 0.25, 0);
+  model.add(nose);
+
+  const eyeL = new THREE.Mesh(new THREE.SphereGeometry(0.018, 5, 4), eyeMat);
+  eyeL.position.set(0.22, 0.3, 0.045);
+  model.add(eyeL);
+  const eyeR = new THREE.Mesh(new THREE.SphereGeometry(0.016, 5, 4), eyeMat);
+  eyeR.position.set(0.2, 0.31, -0.05);
+  model.add(eyeR);
+
+  const earL = new THREE.Mesh(new THREE.SphereGeometry(0.05, 6, 5), dirty);
+  earL.position.set(0.12, 0.26, 0.09);
+  earL.scale.set(0.5, 0.9, 0.7);
+  model.add(earL);
+  const earR = new THREE.Mesh(new THREE.SphereGeometry(0.045, 6, 5), dirty);
+  earR.position.set(0.12, 0.24, -0.1);
+  earR.scale.set(0.5, 1.1, 0.6);
+  model.add(earR);
+
+  const tail = new THREE.Mesh(new THREE.SphereGeometry(0.045, 6, 5), fluff);
+  tail.position.set(-0.16, 0.26, 0.02);
+  model.add(tail);
+  neighborPoodle.userData.tail = tail;
+
+  const legGeo = new THREE.CylinderGeometry(0.018, 0.022, 0.12, 5);
+  const hips = [
+    { x: 0.08, z: 0.05, name: 'frontLeft' },
+    { x: 0.08, z: -0.05, name: 'frontRight' },
+    { x: -0.08, z: 0.05, name: 'backLeft' },
+    { x: -0.08, z: -0.05, name: 'backRight' },
+  ];
+  hips.forEach((pos) => {
+    const hip = new THREE.Group();
+    hip.position.set(pos.x, 0.12, pos.z);
+    const leg = new THREE.Mesh(legGeo, dirty);
+    leg.position.y = -0.06;
+    hip.add(leg);
+    model.add(hip);
+    neighborPoodle.userData[pos.name] = hip;
+  });
+
+  model.rotation.y = -Math.PI / 2;
+  neighborPoodle.add(model);
+  neighborPoodle.position.set(-18, 0, 3.5);
+  neighborPoodleTarget.set(-18, 0, 3.5);
+  scene.add(neighborPoodle);
+}
+
+function pickPoodleTarget() {
+  let x;
+  let z;
+  let tries = 0;
+  do {
+    x = NEIGHBOR_FENCE.minX + 1.4 + Math.random() * (NEIGHBOR_FENCE.maxX - NEIGHBOR_FENCE.minX - 2.8);
+    z = NEIGHBOR_FENCE.minZ + 1.4 + Math.random() * (NEIGHBOR_FENCE.maxZ - NEIGHBOR_FENCE.minZ - 2.8);
+    tries++;
+  } while (isInNeighborHouse(x, z) && tries < 16);
+  if (isInNeighborHouse(x, z)) {
+    x = NEIGHBOR_FENCE.maxX - 2;
+    z = 4;
+  }
+  return { x, z };
+}
+
+function updateNeighborPoodle() {
+  if (!neighborPoodle) return;
+  const time = clock.getElapsedTime();
+  if (neighborPoodleWait > 0) {
+    neighborPoodleWait -= 0.016;
+    neighborPoodle.userData.tail.position.y = 0.26 + Math.sin(time * 10) * 0.02;
+    return;
+  }
+
+  const dir = new THREE.Vector3();
+  dir.subVectors(neighborPoodleTarget, neighborPoodle.position);
+  dir.y = 0;
+  if (dir.length() > 0.25) {
+    dir.normalize();
+    const nx = neighborPoodle.position.x + dir.x * 0.03;
+    const nz = neighborPoodle.position.z + dir.z * 0.03;
+    if (
+      !isInNeighborHouse(nx, nz) &&
+      nx > NEIGHBOR_FENCE.minX + 0.8 &&
+      nx < NEIGHBOR_FENCE.maxX - 0.8 &&
+      nz > NEIGHBOR_FENCE.minZ + 0.8 &&
+      nz < NEIGHBOR_FENCE.maxZ - 0.8
+    ) {
+      neighborPoodle.position.x = nx;
+      neighborPoodle.position.z = nz;
+      neighborPoodle.lookAt(nx + dir.x, 0, nz + dir.z);
+    } else {
+      const t = pickPoodleTarget();
+      neighborPoodleTarget.set(t.x, 0, t.z);
+    }
+    const walk = Math.sin(time * 14);
+    neighborPoodle.userData.frontLeft.rotation.z = walk * 0.5;
+    neighborPoodle.userData.backRight.rotation.z = walk * 0.5;
+    neighborPoodle.userData.frontRight.rotation.z = -walk * 0.5;
+    neighborPoodle.userData.backLeft.rotation.z = -walk * 0.5;
+    neighborPoodle.userData.tail.position.y = 0.26 + Math.sin(time * 12) * 0.03;
+  } else {
+    neighborPoodleWait = 1.2 + Math.random() * 2.5;
+    const t = pickPoodleTarget();
+    neighborPoodleTarget.set(t.x, 0, t.z);
+  }
 }
 
 function setNeighborLounging() {
@@ -1950,10 +2216,10 @@ function updateNeighborWife(time) {
     0 - neighborWife.position.x,
     0 - neighborWife.position.z
   );
-  neighborWife.userData.rightArm.rotation.x = -0.85;
-  neighborWife.userData.rightArm.rotation.z = 0.35;
-  neighborWife.userData.leftArm.rotation.z = 0.12;
-  neighborWife.position.y = Math.sin(time * 1.2) * 0.008;
+  // Hands on hips, staring angrily toward our yard
+  neighborWife.userData.leftArm.rotation.set(0.35, 0.2, 1.35);
+  neighborWife.userData.rightArm.rotation.set(0.35, -0.2, -1.35);
+  neighborWife.position.y = Math.sin(time * 1.1) * 0.006;
 }
 
 function initAudio() {
@@ -2473,6 +2739,12 @@ function restartGame() {
     resetDogLegs();
   }
   
+  if (neighborPoodle) {
+    neighborPoodle.position.set(-18, 0, 3.5);
+    neighborPoodleTarget.set(-18, 0, 3.5);
+    neighborPoodleWait = 0;
+  }
+  
   // Reset cat
   catMeowCooldown = 0;
   if (cat) {
@@ -2802,6 +3074,7 @@ function update() {
 
   updateNeighbor();
   updateNeighborWife(clock.getElapsedTime());
+  updateNeighborPoodle();
   updateDog();
   updateCat();
   updateWife();
@@ -2978,11 +3251,11 @@ function updateCat() {
   }
 }
 
-function wifeSideSpawn() {
-  // Come out of the right side wall, not the front door
+function wifeWallSpawn() {
+  // Back wall, offset from center so she does not walk out of a window
   return {
-    x: houseBounds.maxX - 0.2,
-    z: (houseBounds.minZ + houseBounds.maxZ) * 0.5 + 0.7,
+    x: (houseBounds.minX + houseBounds.maxX) * 0.5 - 1.4,
+    z: houseBounds.minZ + 0.1,
   };
 }
 
@@ -2990,8 +3263,8 @@ function updateWife() {
   if (!wife) return;
   
   const time = clock.getElapsedTime();
-  const spawn = wifeSideSpawn();
-  const outX = houseBounds.maxX + 2.6;
+  const spawn = wifeWallSpawn();
+  const outZ = houseBounds.minZ - 2.5;
   
   if (wifeState === 'inside') {
     wifeTimer += 0.016;
@@ -2999,20 +3272,20 @@ function updateWife() {
       wifeState = 'coming_out';
       wife.visible = true;
       wife.position.set(spawn.x, 0, spawn.z);
-      wife.rotation.y = -Math.PI / 2; // Face +X, out of the wall
+      wife.rotation.y = Math.PI; // Face -Z, out of the back wall
       wifeTimer = 0;
     }
   }
   
   if (wifeState === 'coming_out') {
-    wife.position.x += 0.03;
-    wife.rotation.y = -Math.PI / 2;
+    wife.position.z -= 0.03;
+    wife.rotation.y = Math.PI;
     
     const walkCycle = Math.sin(time * 10) * 0.3;
     wife.userData.leftLeg.rotation.x = walkCycle;
     wife.userData.rightLeg.rotation.x = -walkCycle;
     
-    if (wife.position.x >= outX) {
+    if (wife.position.z <= outZ) {
       wifeState = 'whistling';
       wifeTimer = 0;
       if (audioContext) playWifeWhistle();
@@ -3030,19 +3303,19 @@ function updateWife() {
       wifeState = 'going_in';
       wife.userData.rightArm.rotation.z = 0;
       wife.userData.rightArm.rotation.x = 0;
-      wife.rotation.y = Math.PI / 2; // Face back into the wall
+      wife.rotation.y = 0; // Face back into the house
     }
   }
   
   if (wifeState === 'going_in') {
-    wife.position.x -= 0.03;
-    wife.rotation.y = Math.PI / 2;
+    wife.position.z += 0.03;
+    wife.rotation.y = 0;
     
     const walkCycle = Math.sin(time * 10) * 0.3;
     wife.userData.leftLeg.rotation.x = walkCycle;
     wife.userData.rightLeg.rotation.x = -walkCycle;
     
-    if (wife.position.x <= spawn.x) {
+    if (wife.position.z >= spawn.z) {
       wifeState = 'inside';
       wife.visible = false;
       wifeTimer = 0;
@@ -3093,11 +3366,12 @@ function checkMowing() {
 }
 
 function computePaintGoal() {
-  const w = houseBounds.maxX - houseBounds.minX;
-  const d = houseBounds.maxZ - houseBounds.minZ;
-  const h = Math.min(3.6, Math.max(2.5, (houseBounds.maxY || 4) * 0.42));
-  const area = 2 * (w + d) * h * 0.22;
-  return Math.max(36, Math.min(55, Math.round(area / 0.55)));
+  const w = Math.max(4, houseBounds.maxX - houseBounds.minX);
+  const d = Math.max(4, houseBounds.maxZ - houseBounds.minZ);
+  const h = Math.min(3.5, Math.max(2.8, (houseBounds.maxY || 4) * 0.4));
+  const wallArea = 2 * (w + d) * h * 0.5;
+  const cells = wallArea / (PAINT_CELL * PAINT_CELL);
+  return Math.round(Math.max(160, Math.min(260, cells * 0.72)));
 }
 
 function paintCellKey(point) {
@@ -3180,7 +3454,7 @@ function applyPaintStroke() {
 
   paintedCells.add(key);
   paintProgress = paintedCells.size;
-  while (paintSplats.length > 380) {
+  while (paintSplats.length > 900) {
     const old = paintSplats.shift();
     scene.remove(old);
   }
