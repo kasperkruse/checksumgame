@@ -65,6 +65,9 @@ let punchTime = 0;
 
 // Garden gate
 let gardenGate = null;
+let neighborGate = null;
+let houseDoor = null;
+let houseDoorOpen = false;
 const GATE_POSITION = { x: -14, z: 0 };
 
 // Dog
@@ -105,12 +108,12 @@ const PAINT_COLOR = 0xF4F1EA;
 const FENCE_SIZE = 12;
 
 const NEIGHBOR_FENCE = {
-  minX: -33,
-  maxX: -13.2,
+  minX: -36.5,
+  maxX: -16.8,
   minZ: -9.5,
   maxZ: 9.5,
 };
-const NEIGHBOR_SUNBED_POS = { x: -FENCE_SIZE - 5.2, z: 5.0 };
+const NEIGHBOR_SUNBED_POS = { x: -22.2, z: 5.2 };
 
 const keys = { w: false, a: false, s: false, d: false, space: false };
 
@@ -244,6 +247,7 @@ async function init() {
   createStreet();
   await loadGltfModels();
   createHouse();
+  createHouseDoor();
   createNeighborHouse();
   createPlayerCharacter();
   createDeck();
@@ -440,6 +444,46 @@ function createHouse() {
     minY: grounded.min.y,
     maxY: grounded.max.y,
   };
+}
+
+function createHouseDoor() {
+  houseDoor = new THREE.Group();
+  const wood = new THREE.MeshLambertMaterial({ color: 0x6B3E26 });
+  const trim = new THREE.MeshLambertMaterial({ color: 0x4A2C17 });
+  const metal = new THREE.MeshLambertMaterial({ color: 0xC9A227 });
+
+  const panel = new THREE.Mesh(new THREE.BoxGeometry(0.92, 2.05, 0.07), wood);
+  panel.position.set(0.46, 1.025, 0);
+  panel.castShadow = true;
+  houseDoor.add(panel);
+
+  const window = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.28, 0.35),
+    new THREE.MeshLambertMaterial({ color: 0xAED6F1 })
+  );
+  window.position.set(0.46, 1.55, 0.04);
+  houseDoor.add(window);
+
+  const handle = new THREE.Mesh(new THREE.SphereGeometry(0.035, 8, 6), metal);
+  handle.position.set(0.78, 1.02, 0.06);
+  houseDoor.add(handle);
+
+  const hinge = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.18, 8), trim);
+  hinge.position.set(0.02, 1.5, 0);
+  houseDoor.add(hinge);
+
+  const midX = (houseBounds.minX + houseBounds.maxX) * 0.5;
+  houseDoor.position.set(midX - 0.46, 0, houseBounds.maxZ + 0.06);
+  houseDoorOpen = false;
+  scene.add(houseDoor);
+}
+
+function setHouseDoorOpen(open) {
+  if (!houseDoor) return;
+  const next = open ? -1.35 : 0;
+  if (open !== houseDoorOpen) playDoorSound(open, false);
+  houseDoorOpen = open;
+  houseDoor.rotation.y = next;
 }
 
 function createNeighborHouse() {
@@ -1166,13 +1210,15 @@ function createTrees() {
   };
 
   const treePositions = [
-    // Outside fence - decorative
+    // Far side of the street (not on the asphalt)
+    [29, -12, 1.2], [31, 2, 1], [30, 10, 1.3],
+    [28.5, -6, 1.1], [32, 5, 1.2], [29.5, 14, 1],
+    [30.5, -16, 1.1], [31.5, 16, 1],
+    // West of our yard / neighbor side
     [-18, -12, 1.2], [-20, 2, 1], [-19, 10, 1.3],
-    [18, -10, 1.1], [20, 4, 1.2], [19, 12, 1],
-    [-22, -5, 0.9], [22, -2, 1.1], [-17, 16, 1],
-    [17, -16, 1.2], [-21, -16, 1.1], [21, 16, 1],
-    // Inside yard corners
-    [-12, -12, 0.8], [12, -12, 0.8], [-12, 12, 0.9], [12, 12, 0.9]
+    [-22, -5, 0.9], [-17, 16, 1], [-21, -16, 1.1],
+    // Inside yard corners (inside the fence, off the road)
+    [-10.5, -10.5, 0.8], [10.5, -10.5, 0.8], [-10.5, 10.5, 0.9], [10.5, 10.5, 0.9]
   ];
 
   treePositions.forEach(([x, z, scale]) => {
@@ -1962,7 +2008,7 @@ function createNeighborWife() {
     neighborWife.add(leg);
   });
 
-  neighborWife.position.set(-FENCE_SIZE - 4.4, 0, -1.6);
+  neighborWife.position.set(-19.6, 0, -1.8);
   scene.add(neighborWife);
 }
 
@@ -2036,6 +2082,38 @@ function createNeighborFence() {
     post.position.set(x, 0.62, z);
     scene.add(post);
   });
+
+  neighborGate = new THREE.Group();
+  const gateMat = new THREE.MeshLambertMaterial({ color: 0x8A7B63 });
+  for (let i = 0; i < 6; i++) {
+    const bar = new THREE.Mesh(new THREE.BoxGeometry(0.05, 1.05, 0.025), gateMat);
+    bar.position.set(0, 0.52, -1.0 + i * 0.4);
+    neighborGate.add(bar);
+  }
+  const rail = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.05, 2.2), gateMat);
+  rail.position.set(0, 0.35, 0);
+  neighborGate.add(rail);
+  const rail2 = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.05, 2.2), gateMat);
+  rail2.position.set(0, 0.75, 0);
+  neighborGate.add(rail2);
+  neighborGate.position.set(maxX, 0, 0);
+  scene.add(neighborGate);
+}
+
+function setGardenGateOpen(open) {
+  if (!gardenGate) return;
+  const closed = Math.PI / 2;
+  const opened = Math.PI / 2 - 0.95;
+  const next = open ? opened : closed;
+  if (Math.abs(gardenGate.rotation.y - next) > 0.05) playDoorSound(open, true);
+  gardenGate.rotation.y = next;
+}
+
+function setNeighborGateOpen(open) {
+  if (!neighborGate) return;
+  const next = open ? -1.1 : 0;
+  if (Math.abs(neighborGate.rotation.y - next) > 0.05) playDoorSound(open, true);
+  neighborGate.rotation.y = next;
 }
 
 function isInNeighborHouse(x, z) {
@@ -2125,8 +2203,8 @@ function createNeighborPoodle() {
 
   model.rotation.y = -Math.PI / 2;
   neighborPoodle.add(model);
-  neighborPoodle.position.set(-18, 0, 3.5);
-  neighborPoodleTarget.set(-18, 0, 3.5);
+  neighborPoodle.position.set(-22, 0, 3.5);
+  neighborPoodleTarget.set(-22, 0, 3.5);
   scene.add(neighborPoodle);
 }
 
@@ -2562,6 +2640,58 @@ function playCatMeow() {
   osc.stop(audioContext.currentTime + 0.5);
 }
 
+function playDoorSound(opening, isGate = false) {
+  if (!audioContext) return;
+  const t0 = audioContext.currentTime;
+
+  const click = audioContext.createOscillator();
+  const clickGain = audioContext.createGain();
+  click.type = 'square';
+  click.frequency.setValueAtTime(opening ? 420 : 280, t0);
+  click.frequency.exponentialRampToValueAtTime(opening ? 180 : 120, t0 + 0.05);
+  clickGain.gain.setValueAtTime(0.07, t0);
+  clickGain.gain.exponentialRampToValueAtTime(0.001, t0 + 0.07);
+  click.connect(clickGain);
+  clickGain.connect(audioContext.destination);
+  click.start(t0);
+  click.stop(t0 + 0.08);
+
+  const duration = isGate ? 0.45 : 0.55;
+  const bufferSize = Math.floor(audioContext.sampleRate * duration);
+  const noiseBuffer = audioContext.createBuffer(1, bufferSize, audioContext.sampleRate);
+  const data = noiseBuffer.getChannelData(0);
+  for (let i = 0; i < bufferSize; i++) {
+    const env = 1 - i / bufferSize;
+    data[i] = (Math.random() * 2 - 1) * env * env;
+  }
+  const noise = audioContext.createBufferSource();
+  noise.buffer = noiseBuffer;
+  const filter = audioContext.createBiquadFilter();
+  filter.type = 'bandpass';
+  filter.frequency.setValueAtTime(opening ? 350 : 220, t0);
+  filter.frequency.linearRampToValueAtTime(opening ? 180 : 140, t0 + duration);
+  filter.Q.value = 4;
+  const noiseGain = audioContext.createGain();
+  noiseGain.gain.setValueAtTime(isGate ? 0.16 : 0.2, t0);
+  noiseGain.gain.exponentialRampToValueAtTime(0.001, t0 + duration);
+  noise.connect(filter);
+  filter.connect(noiseGain);
+  noiseGain.connect(audioContext.destination);
+  noise.start(t0);
+
+  const creak = audioContext.createOscillator();
+  const creakGain = audioContext.createGain();
+  creak.type = 'sawtooth';
+  creak.frequency.setValueAtTime(opening ? 90 : 70, t0);
+  creak.frequency.linearRampToValueAtTime(opening ? 55 : 95, t0 + duration);
+  creakGain.gain.setValueAtTime(0.04, t0);
+  creakGain.gain.exponentialRampToValueAtTime(0.001, t0 + duration);
+  creak.connect(creakGain);
+  creakGain.connect(audioContext.destination);
+  creak.start(t0);
+  creak.stop(t0 + duration);
+}
+
 function playWifeWhistle() {
   if (!audioContext) return;
   if (soundBuffers.whistle) {
@@ -2740,8 +2870,8 @@ function restartGame() {
   }
   
   if (neighborPoodle) {
-    neighborPoodle.position.set(-18, 0, 3.5);
-    neighborPoodleTarget.set(-18, 0, 3.5);
+    neighborPoodle.position.set(-22, 0, 3.5);
+    neighborPoodleTarget.set(-22, 0, 3.5);
     neighborPoodleWait = 0;
   }
   
@@ -2773,9 +2903,9 @@ function restartGame() {
   document.getElementById('restart-btn').textContent = '🔄 Ny dag';
   document.getElementById('restart-btn').onclick = restartGame;
   // Reset gate
-  if (gardenGate) {
-    gardenGate.rotation.y = Math.PI / 2;
-  }
+  if (gardenGate) setGardenGateOpen(false);
+  if (neighborGate) setNeighborGateOpen(false);
+  setHouseDoorOpen(false);
   // Reset first-person view
   if (playerArms) playerArms.visible = false;
   if (fpMowerHandle) fpMowerHandle.visible = true;
@@ -2813,10 +2943,8 @@ function updateNeighbor() {
     neighborAnger = 100;
     dogBarkedAtNeighbor = false;
     
-    // Open the gate animation
-    if (gardenGate) {
-      gardenGate.rotation.y = Math.PI / 2 - 0.8; // Gate swings open
-    }
+    setNeighborGateOpen(true);
+    setTimeout(() => setGardenGateOpen(true), 450);
   }
   
   // Dog barks when neighbor enters the yard
@@ -2965,10 +3093,8 @@ function updateNeighbor() {
       setMusicVolume(0.14);
       if (window.speechSynthesis) window.speechSynthesis.cancel();
       document.getElementById('health-bar').classList.add('hidden');
-      // Close the gate
-      if (gardenGate) {
-        gardenGate.rotation.y = Math.PI / 2;
-      }
+      setGardenGateOpen(false);
+      setNeighborGateOpen(false);
       // Show mower handle again
       if (playerArms) playerArms.visible = false;
       if (fpMowerHandle) fpMowerHandle.visible = true;
@@ -3251,11 +3377,10 @@ function updateCat() {
   }
 }
 
-function wifeWallSpawn() {
-  // Back wall, offset from center so she does not walk out of a window
+function wifeDoorSpawn() {
   return {
-    x: (houseBounds.minX + houseBounds.maxX) * 0.5 - 1.4,
-    z: houseBounds.minZ + 0.1,
+    x: (houseBounds.minX + houseBounds.maxX) * 0.5,
+    z: houseBounds.maxZ + 0.15,
   };
 }
 
@@ -3263,29 +3388,34 @@ function updateWife() {
   if (!wife) return;
   
   const time = clock.getElapsedTime();
-  const spawn = wifeWallSpawn();
-  const outZ = houseBounds.minZ - 2.5;
+  const spawn = wifeDoorSpawn();
+  const outZ = houseBounds.maxZ + 2.4;
   
   if (wifeState === 'inside') {
     wifeTimer += 0.016;
     if (wifeTimer >= wifeNextAppearance) {
       wifeState = 'coming_out';
+      setHouseDoorOpen(true);
       wife.visible = true;
       wife.position.set(spawn.x, 0, spawn.z);
-      wife.rotation.y = Math.PI; // Face -Z, out of the back wall
+      wife.rotation.y = 0;
       wifeTimer = 0;
     }
   }
   
   if (wifeState === 'coming_out') {
-    wife.position.z -= 0.03;
-    wife.rotation.y = Math.PI;
+    wife.position.z += 0.03;
+    wife.rotation.y = 0;
     
     const walkCycle = Math.sin(time * 10) * 0.3;
     wife.userData.leftLeg.rotation.x = walkCycle;
     wife.userData.rightLeg.rotation.x = -walkCycle;
     
-    if (wife.position.z <= outZ) {
+    if (wife.position.z >= houseBounds.maxZ + 1.4 && houseDoorOpen) {
+      setHouseDoorOpen(false);
+    }
+    
+    if (wife.position.z >= outZ) {
       wifeState = 'whistling';
       wifeTimer = 0;
       if (audioContext) playWifeWhistle();
@@ -3303,23 +3433,25 @@ function updateWife() {
       wifeState = 'going_in';
       wife.userData.rightArm.rotation.z = 0;
       wife.userData.rightArm.rotation.x = 0;
-      wife.rotation.y = 0; // Face back into the house
+      wife.rotation.y = Math.PI;
+      setHouseDoorOpen(true);
     }
   }
   
   if (wifeState === 'going_in') {
-    wife.position.z += 0.03;
-    wife.rotation.y = 0;
+    wife.position.z -= 0.03;
+    wife.rotation.y = Math.PI;
     
     const walkCycle = Math.sin(time * 10) * 0.3;
     wife.userData.leftLeg.rotation.x = walkCycle;
     wife.userData.rightLeg.rotation.x = -walkCycle;
     
-    if (wife.position.z >= spawn.z) {
+    if (wife.position.z <= spawn.z) {
       wifeState = 'inside';
       wife.visible = false;
       wifeTimer = 0;
       wifeNextAppearance = 15 + Math.random() * 30;
+      setHouseDoorOpen(false);
     }
   }
 }
