@@ -4,29 +4,34 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Græsslåning - Havemand</title>
+    <title>NEON MOWER // 1987</title>
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
     <div id="game-container">
+      <div id="click-prompt">
+        <h2>► KLIK FOR AT SPILLE ◄</h2>
+        <p>WASD = BEVÆG // MUS = KIG</p>
+      </div>
+      <div class="scanlines"></div>
       <div id="hud">
-        <div class="hud-item" id="money-display">💰 Penge: <span id="money">0</span> kr</div>
-        <div class="hud-item" id="grass-display">🌿 Græs slået: <span id="grass-percent">0</span>%</div>
-        <div class="hud-item" id="controls-hint">⌨️ WASD / Piletaster for at bevæge dig</div>
+        <div class="hud-item" id="money-display">PENGE: <span id="money">0</span> KR</div>
+        <div class="hud-item" id="grass-display">GRÆS: <span id="grass-percent">0</span>%</div>
+        <div class="hud-item" id="controls-hint">WASD+MUS</div>
       </div>
       <div id="completion-modal" class="hidden">
         <div class="modal-content">
-          <h2>🎉 Græsset er slået!</h2>
-          <p>Du har tjent <span id="reward-amount">100</span> kr</p>
+          <h2>★ LEVEL COMPLETE ★</h2>
+          <p>+<span id="reward-amount">100</span> KR</p>
           <div class="next-jobs">
-            <h3>Næste opgaver:</h3>
+            <h3>► NÆSTE LEVELS:</h3>
             <ul>
-              <li>🎨 Male hegnet (kommer snart)</li>
-              <li>🌳 Beskære hækken (kommer snart)</li>
-              <li>🚗 Vaske bilen (kommer snart)</li>
+              <li>► MALE HEGNET [LOCKED]</li>
+              <li>► BESKÆRE HÆKKEN [LOCKED]</li>
+              <li>► VASKE BILEN [LOCKED]</li>
             </ul>
           </div>
-          <button id="restart-btn">🔄 Ny dag</button>
+          <button id="restart-btn">► CONTINUE ◄</button>
         </div>
       </div>
     </div>
