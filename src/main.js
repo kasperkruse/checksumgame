@@ -69,6 +69,14 @@ const PAINT_REWARD = 150;
 // Yard size (15% smaller than 14 = ~12)
 const FENCE_SIZE = 12;
 
+// House box used by both the building and paint-level wall tiles
+const HOUSE_WIDTH = 8;
+const HOUSE_HEIGHT = 4;
+const HOUSE_DEPTH = 6;
+const HOUSE_WALL_Y = 2.3;
+const UNPAINTED_WALL = 0x8B7355;
+const PAINTED_WALL = 0xF5F0E6;
+
 const keys = { w: false, a: false, s: false, d: false, space: false };
 
 // Bright suburban midday color palette
@@ -331,7 +339,7 @@ function createHouse() {
   const house = new THREE.Group();
 
   // Foundation
-  const baseGeo = new THREE.BoxGeometry(8, 0.3, 6);
+  const baseGeo = new THREE.BoxGeometry(HOUSE_WIDTH, 0.3, HOUSE_DEPTH);
   const baseMat = new THREE.MeshLambertMaterial({ color: 0x808080 });
   const base = new THREE.Mesh(baseGeo, baseMat);
   base.position.y = 0.15;
@@ -339,10 +347,10 @@ function createHouse() {
   house.add(base);
 
   // Blue siding walls
-  const wallGeo = new THREE.BoxGeometry(8, 4, 6);
+  const wallGeo = new THREE.BoxGeometry(HOUSE_WIDTH, HOUSE_HEIGHT, HOUSE_DEPTH);
   const wallMat = new THREE.MeshLambertMaterial({ color: COLORS.houseWall });
   const walls = new THREE.Mesh(wallGeo, wallMat);
-  walls.position.y = 2.3;
+  walls.position.y = HOUSE_WALL_Y;
   walls.castShadow = true;
   walls.receiveShadow = true;
   house.add(walls);
@@ -2039,7 +2047,7 @@ function setupControls() {
         const section = intersects[0].object;
         if (!section.userData.painted && intersects[0].distance < 8) { // Increased range
           section.userData.painted = true;
-          section.material.color.setHex(0xFFFFF0); // White paint
+          section.material.color.setHex(PAINTED_WALL);
           paintProgress++;
           updateHUD();
           checkCompletion();
@@ -2094,10 +2102,7 @@ function restartGame() {
   createGrass();
   
   // Reset paint sections
-  paintSections.forEach(section => {
-    section.visible = false;
-    section.userData.painted = false;
-  });
+  clearPaintSections();
   paintProgress = 0;
   
   // Reset player
@@ -2633,50 +2638,67 @@ function checkPainting() {
   // Painting happens through click handler
 }
 
-function createPaintSections() {
+function clearPaintSections() {
+  paintSections.forEach(section => scene.remove(section));
   paintSections = [];
-  
-  // Create paint sections that fully cover each wall - old peeling paint look
-  const unpaintedMat = new THREE.MeshLambertMaterial({ 
-    color: 0x8B7355, // Faded/dirty brown - needs painting!
-    side: THREE.DoubleSide
+  totalPaintSections = 0;
+}
+
+function createPaintSections() {
+  clearPaintSections();
+
+  const unpaintedMat = new THREE.MeshLambertMaterial({
+    color: UNPAINTED_WALL,
+    side: THREE.FrontSide
   });
-  
-  // Full wall coverage sections - positioned exactly on wall surfaces
-  const wallPositions = [
-    // Front wall - full coverage in 4 sections (avoiding door and windows)
-    { x: -3, y: 2, z: 4.01, w: 2, h: 3 },      // Left upper
-    { x: 3, y: 2, z: 4.01, w: 2, h: 3 },       // Right upper
-    { x: -3, y: 0.5, z: 4.01, w: 2, h: 1 },    // Left lower
-    { x: 3, y: 0.5, z: 4.01, w: 2, h: 1 },     // Right lower
-    
-    // Left wall - 3 sections
-    { x: -4.01, y: 2.5, z: 2, w: 3, h: 4, rotY: Math.PI / 2 },
-    { x: -4.01, y: 2.5, z: -2, w: 3, h: 4, rotY: Math.PI / 2 },
-    
-    // Right wall - 3 sections  
-    { x: 4.01, y: 2.5, z: 2, w: 3, h: 4, rotY: -Math.PI / 2 },
-    { x: 4.01, y: 2.5, z: -2, w: 3, h: 4, rotY: -Math.PI / 2 },
-    
-    // Back wall - 2 sections
-    { x: -2, y: 2.5, z: -4.01, w: 3, h: 4, rotY: Math.PI },
-    { x: 2, y: 2.5, z: -4.01, w: 3, h: 4, rotY: Math.PI },
-  ];
-  
-  wallPositions.forEach((pos, index) => {
+
+  // Match createHouse() wall box exactly so tiles sit on the siding, not in the air
+  const halfW = HOUSE_WIDTH / 2;
+  const halfD = HOUSE_DEPTH / 2;
+  const wallBottom = HOUSE_WALL_Y - HOUSE_HEIGHT / 2;
+  const wallTop = HOUSE_WALL_Y + HOUSE_HEIGHT / 2;
+  const tile = 1;
+  const eps = 0.03;
+
+  function overlapsDoor(x, y, face) {
+    return face === 'front' && Math.abs(x) < 0.7 && y < 2.75;
+  }
+
+  function overlapsWindow(x, y, face) {
+    if (face !== 'front' && face !== 'back') return false;
+    const onWindowX = Math.abs(Math.abs(x) - 2.5) < 0.65;
+    const onWindowY = Math.abs(y - 2.5) < 0.75;
+    return onWindowX && onWindowY;
+  }
+
+  function addTile(x, y, z, rotY, face) {
+    if (overlapsDoor(x, y, face) || overlapsWindow(x, y, face)) return;
     const section = new THREE.Mesh(
-      new THREE.PlaneGeometry(pos.w, pos.h),
+      new THREE.PlaneGeometry(tile, tile),
       unpaintedMat.clone()
     );
-    section.position.set(pos.x, pos.y, pos.z);
-    if (pos.rotY) section.rotation.y = pos.rotY;
+    section.position.set(x, y, z);
+    section.rotation.y = rotY;
     section.userData.painted = false;
-    section.userData.index = index;
-    section.visible = false; // Hidden until level 2
+    section.visible = false;
     paintSections.push(section);
     scene.add(section);
-  });
-  
+  }
+
+  for (let x = -halfW + tile / 2; x < halfW - 0.01; x += tile) {
+    for (let y = wallBottom + tile / 2; y < wallTop - 0.01; y += tile) {
+      addTile(x, y, halfD + eps, 0, 'front');
+      addTile(x, y, -(halfD + eps), Math.PI, 'back');
+    }
+  }
+
+  for (let z = -halfD + tile / 2; z < halfD - 0.01; z += tile) {
+    for (let y = wallBottom + tile / 2; y < wallTop - 0.01; y += tile) {
+      addTile(-(halfW + eps), y, z, -Math.PI / 2, 'left');
+      addTile(halfW + eps, y, z, Math.PI / 2, 'right');
+    }
+  }
+
   totalPaintSections = paintSections.length;
 }
 
@@ -2737,14 +2759,12 @@ function startLevel2() {
   if (window.grassInstancedLight) window.grassInstancedLight.visible = false;
   if (window.grassInstancedDark) window.grassInstancedDark.visible = false;
   
-  // Create and show paint sections
-  if (paintSections.length === 0) {
-    createPaintSections();
-  }
+  // Recreate paint tiles flush on the house walls
+  createPaintSections();
   paintSections.forEach(section => {
     section.visible = true;
     section.userData.painted = false;
-    section.material.color.setHex(COLORS.houseWall);
+    section.material.color.setHex(UNPAINTED_WALL);
   });
   
   // Hide mower, show paintbrush
