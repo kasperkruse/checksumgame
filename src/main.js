@@ -2590,17 +2590,17 @@ function checkMowing() {
     if (dist < MOW_RADIUS) {
       grass.isTall = false;
       
-      // Find which instanced mesh this grass belongs to and scale it down
+      // Find which instanced mesh this grass belongs to and hide it (scale to nearly zero)
       if (grass.stripeLight) {
         const lightIndex = window.grassLightPositions.findIndex(p => 
           Math.abs(p.x - grass.x) < 0.1 && Math.abs(p.z - grass.z) < 0.1
         );
         if (lightIndex >= 0) {
-          // Scale down both blades at this position
+          // Hide both blades at this position by scaling to nearly zero
           for (let b = 0; b < 2; b++) {
-            dummy.position.set(grass.x, 0.02, grass.z);
+            dummy.position.set(grass.x, -1, grass.z); // Move below ground
             dummy.rotation.set(0, 0, 0);
-            dummy.scale.set(1.5, 0.1, 1.5); // Flat cut grass
+            dummy.scale.set(0.01, 0.01, 0.01); // Essentially invisible
             dummy.updateMatrix();
             window.grassInstancedLight.setMatrixAt(lightIndex * 2 + b, dummy.matrix);
           }
@@ -2612,9 +2612,9 @@ function checkMowing() {
         );
         if (darkIndex >= 0) {
           for (let b = 0; b < 2; b++) {
-            dummy.position.set(grass.x, 0.02, grass.z);
+            dummy.position.set(grass.x, -1, grass.z); // Move below ground
             dummy.rotation.set(0, 0, 0);
-            dummy.scale.set(1.5, 0.1, 1.5);
+            dummy.scale.set(0.01, 0.01, 0.01); // Essentially invisible
             dummy.updateMatrix();
             window.grassInstancedDark.setMatrixAt(darkIndex * 2 + b, dummy.matrix);
           }
