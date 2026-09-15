@@ -765,6 +765,7 @@ function createGardenGate() {
 
 function createDog() {
   dog = new THREE.Group();
+  const model = new THREE.Group();
   
   const bodyMat = new THREE.MeshLambertMaterial({ color: 0xD2691E }); // Golden brown
   const darkMat = new THREE.MeshLambertMaterial({ color: 0x8B4513 }); // Darker brown
@@ -777,31 +778,31 @@ function createDog() {
   body.rotation.z = Math.PI / 2;
   body.position.set(0, 0.35, 0);
   body.castShadow = true;
-  dog.add(body);
+  model.add(body);
   
   // Head
   const head = new THREE.Mesh(new THREE.SphereGeometry(0.15, 8, 6), bodyMat);
   head.position.set(0.35, 0.42, 0);
   head.scale.set(1.1, 1, 0.9);
   head.castShadow = true;
-  dog.add(head);
+  model.add(head);
   
   // Snout
   const snout = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.08, 0.15, 8), bodyMat);
   snout.rotation.z = Math.PI / 2;
   snout.position.set(0.48, 0.38, 0);
-  dog.add(snout);
+  model.add(snout);
   
   // Nose
   const nose = new THREE.Mesh(new THREE.SphereGeometry(0.03, 6, 4), noseMat);
   nose.position.set(0.56, 0.38, 0);
-  dog.add(nose);
+  model.add(nose);
   
   // Eyes
   [-0.05, 0.05].forEach(z => {
     const eye = new THREE.Mesh(new THREE.SphereGeometry(0.025, 6, 4), eyeMat);
     eye.position.set(0.44, 0.46, z);
-    dog.add(eye);
+    model.add(eye);
   });
   
   // Ears (floppy)
@@ -809,45 +810,62 @@ function createDog() {
     const ear = new THREE.Mesh(new THREE.SphereGeometry(0.06, 6, 4), darkMat);
     ear.position.set(0.3, 0.5, z);
     ear.scale.set(0.5, 1, 0.8);
-    dog.add(ear);
+    model.add(ear);
   });
   
   // Tongue (happy dog!)
   const tongue = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.02, 0.04), tongueMat);
   tongue.position.set(0.5, 0.32, 0);
   tongue.rotation.x = 0.3;
-  dog.add(tongue);
+  model.add(tongue);
   dog.userData.tongue = tongue;
   
-  // Legs
-  const legGeo = new THREE.CylinderGeometry(0.04, 0.04, 0.25, 6);
+  // Legs swing from the hip so they actually walk
+  const legGeo = new THREE.CylinderGeometry(0.04, 0.045, 0.26, 6);
   const legPositions = [
-    { x: 0.15, z: 0.1, name: 'frontLeft' },
-    { x: 0.15, z: -0.1, name: 'frontRight' },
-    { x: -0.15, z: 0.1, name: 'backLeft' },
-    { x: -0.15, z: -0.1, name: 'backRight' }
+    { x: 0.16, z: 0.1, name: 'frontLeft' },
+    { x: 0.16, z: -0.1, name: 'frontRight' },
+    { x: -0.16, z: 0.1, name: 'backLeft' },
+    { x: -0.16, z: -0.1, name: 'backRight' }
   ];
   
   legPositions.forEach(pos => {
+    const hip = new THREE.Group();
+    hip.position.set(pos.x, 0.26, pos.z);
     const leg = new THREE.Mesh(legGeo, bodyMat);
-    leg.position.set(pos.x, 0.12, pos.z);
+    leg.position.y = -0.13;
     leg.castShadow = true;
-    dog.add(leg);
-    dog.userData[pos.name] = leg;
+    hip.add(leg);
+    model.add(hip);
+    dog.userData[pos.name] = hip;
   });
   
   // Tail (wagging!)
   const tail = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.04, 0.2, 6), darkMat);
   tail.position.set(-0.3, 0.45, 0);
   tail.rotation.z = -0.5;
-  dog.add(tail);
+  model.add(tail);
   dog.userData.tail = tail;
+
+  // Model faces +X; rotate so lookAt (which uses -Z) points the nose forward
+  model.rotation.y = Math.PI / 2;
+  dog.add(model);
   
   // Start position
   dog.position.set(5, 0, 8);
   dogTarget.set(5, 0, 8);
   
   scene.add(dog);
+}
+
+function resetDogLegs() {
+  if (!dog) return;
+  ['frontLeft', 'frontRight', 'backLeft', 'backRight'].forEach((name) => {
+    const hip = dog.userData[name];
+    if (!hip) return;
+    hip.rotation.x = 0;
+    hip.rotation.z = 0;
+  });
 }
 
 function createCat() {
@@ -2100,7 +2118,7 @@ function restartGame() {
     dogIsPeeing = false;
     dogPeeTime = 0;
     dogBarkedAtNeighbor = false;
-    dog.userData.backRight.rotation.z = 0;
+    resetDogLegs();
   }
   
   // Reset cat
@@ -2452,12 +2470,13 @@ function updateDog() {
   if (dogIsPeeing) {
     dogPeeTime -= 0.016;
     // Lift leg pose
-    dog.userData.backRight.rotation.z = 0.8;
+    dog.userData.backRight.rotation.z = 0;
+    dog.userData.backRight.rotation.x = 0.9;
     dog.userData.tail.rotation.z = -0.3;
     
     if (dogPeeTime <= 0) {
       dogIsPeeing = false;
-      dog.userData.backRight.rotation.z = 0;
+      resetDogLegs();
       dogWaitTime = 1 + Math.random() * 2;
     }
     return;
@@ -2466,6 +2485,7 @@ function updateDog() {
   // Dog AI - wander around happily
   if (dogWaitTime > 0) {
     dogWaitTime -= 0.016;
+    resetDogLegs();
     // Idle animation - wag tail
     dog.userData.tail.rotation.z = -0.5 + Math.sin(time * 15) * 0.4;
     // Pant (tongue bob)
@@ -2480,16 +2500,19 @@ function updateDog() {
   
   if (dir.length() > 0.3) {
     dir.normalize();
-    dog.position.x += dir.x * 0.04;
-    dog.position.z += dir.z * 0.04;
-    dog.lookAt(dogTarget.x, dog.position.y, dogTarget.z);
+    const running = distToPlayer < 3.5;
+    const speed = running ? 0.07 : 0.045;
+    dog.position.x += dir.x * speed;
+    dog.position.z += dir.z * speed;
+    dog.lookAt(dog.position.x + dir.x, dog.position.y, dog.position.z + dir.z);
     
-    // Walking animation
-    const walkCycle = Math.sin(time * 12);
-    dog.userData.frontLeft.position.y = 0.12 + Math.abs(walkCycle) * 0.03;
-    dog.userData.frontRight.position.y = 0.12 + Math.abs(-walkCycle) * 0.03;
-    dog.userData.backLeft.position.y = 0.12 + Math.abs(-walkCycle) * 0.03;
-    dog.userData.backRight.position.y = 0.12 + Math.abs(walkCycle) * 0.03;
+    // Trot: opposite legs move together
+    const walkCycle = Math.sin(time * (running ? 16 : 11));
+    const amp = running ? 0.7 : 0.5;
+    dog.userData.frontLeft.rotation.z = walkCycle * amp;
+    dog.userData.backRight.rotation.z = walkCycle * amp;
+    dog.userData.frontRight.rotation.z = -walkCycle * amp;
+    dog.userData.backLeft.rotation.z = -walkCycle * amp;
     
     // Tail wag while walking
     dog.userData.tail.rotation.z = -0.5 + Math.sin(time * 12) * 0.3;
