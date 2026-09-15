@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 
 const WORLD_SIZE = 30;
-const GRASS_DENSITY = 6;
+const GRASS_DENSITY = 10;
 const PLAYER_SPEED = 0.1;
 const MOUSE_SENSITIVITY = 0.002;
 const MOW_RADIUS = 1.0;
@@ -52,6 +52,19 @@ let dogBarkedAtNeighbor = false;
 // Cat
 let cat = null;
 let catMeowCooldown = 0;
+
+// Wife
+let wife = null;
+let wifeState = 'inside'; // 'inside', 'coming_out', 'whistling', 'going_in'
+let wifeTimer = 0;
+let wifeNextAppearance = 0;
+
+// Game levels
+let currentLevel = 1; // 1 = mow grass, 2 = paint house
+let paintProgress = 0;
+let paintSections = [];
+let totalPaintSections = 0;
+const PAINT_REWARD = 150;
 
 // Yard size (15% smaller than 14 = ~12)
 const FENCE_SIZE = 12;
@@ -200,8 +213,13 @@ function init() {
   createNeighbor();
   createDog();
   createCat();
+  createWife();
+  createPaintSections();
   createFirstPersonArms();
   createFirstPersonMower();
+  
+  // Wife appears randomly
+  wifeNextAppearance = 10 + Math.random() * 20;
 
   setupControls();
   window.addEventListener('resize', onWindowResize);
@@ -952,6 +970,98 @@ function createCat() {
   scene.add(cat);
 }
 
+function createWife() {
+  wife = new THREE.Group();
+  
+  const skinMat = new THREE.MeshLambertMaterial({ color: 0xFFDBC4 });
+  const hairMat = new THREE.MeshLambertMaterial({ color: 0x4A3728 }); // Brown hair
+  const dressMat = new THREE.MeshLambertMaterial({ color: 0x87CEEB }); // Light blue dress
+  const shoeMat = new THREE.MeshLambertMaterial({ color: 0x8B4513 });
+  
+  // Head
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.2, 12, 10), skinMat);
+  head.position.y = 1.5;
+  head.scale.set(0.9, 1, 0.85);
+  head.castShadow = true;
+  wife.add(head);
+  
+  // Hair (longer, styled)
+  const hairTop = new THREE.Mesh(new THREE.SphereGeometry(0.22, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.6), hairMat);
+  hairTop.position.y = 1.55;
+  wife.add(hairTop);
+  
+  // Hair sides/back (ponytail style)
+  const hairBack = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.06, 0.4, 8), hairMat);
+  hairBack.position.set(0, 1.3, -0.15);
+  hairBack.rotation.x = 0.3;
+  wife.add(hairBack);
+  
+  // Eyes
+  const eyeMat = new THREE.MeshLambertMaterial({ color: 0x4169E1 }); // Blue eyes
+  [-0.07, 0.07].forEach(x => {
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.03, 6, 4), eyeMat);
+    eye.position.set(x, 1.52, 0.16);
+    wife.add(eye);
+  });
+  
+  // Smile
+  const smileMat = new THREE.MeshLambertMaterial({ color: 0xCC6666 });
+  const smile = new THREE.Mesh(new THREE.TorusGeometry(0.05, 0.01, 8, 8, Math.PI), smileMat);
+  smile.position.set(0, 1.42, 0.16);
+  smile.rotation.x = Math.PI;
+  wife.add(smile);
+  
+  // Body/Dress
+  const dress = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.25, 0.7, 12), dressMat);
+  dress.position.y = 0.95;
+  dress.castShadow = true;
+  wife.add(dress);
+  
+  // Arms
+  const armGeo = new THREE.CylinderGeometry(0.04, 0.045, 0.35, 8);
+  
+  const leftArm = new THREE.Group();
+  leftArm.position.set(-0.2, 1.15, 0);
+  const leftArmMesh = new THREE.Mesh(armGeo, skinMat);
+  leftArm.add(leftArmMesh);
+  wife.add(leftArm);
+  wife.userData.leftArm = leftArm;
+  
+  const rightArm = new THREE.Group();
+  rightArm.position.set(0.2, 1.15, 0);
+  const rightArmMesh = new THREE.Mesh(armGeo, skinMat);
+  rightArm.add(rightArmMesh);
+  wife.add(rightArm);
+  wife.userData.rightArm = rightArm;
+  
+  // Legs
+  const legGeo = new THREE.CylinderGeometry(0.05, 0.05, 0.4, 8);
+  
+  const leftLeg = new THREE.Group();
+  leftLeg.position.set(-0.08, 0.4, 0);
+  leftLeg.add(new THREE.Mesh(legGeo, skinMat));
+  const leftShoe = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.05, 0.12), shoeMat);
+  leftShoe.position.y = -0.22;
+  leftLeg.add(leftShoe);
+  wife.add(leftLeg);
+  wife.userData.leftLeg = leftLeg;
+  
+  const rightLeg = new THREE.Group();
+  rightLeg.position.set(0.08, 0.4, 0);
+  rightLeg.add(new THREE.Mesh(legGeo, skinMat));
+  const rightShoe = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.05, 0.12), shoeMat);
+  rightShoe.position.y = -0.22;
+  rightLeg.add(rightShoe);
+  wife.add(rightLeg);
+  wife.userData.rightLeg = rightLeg;
+  
+  // Start inside house (hidden)
+  wife.position.set(0, 0, 1); // Near door
+  wife.visible = false;
+  
+  scene.add(wife);
+}
+
 function createTrees() {
   const createTree = (x, z, scale = 1) => {
     const tree = new THREE.Group();
@@ -1306,34 +1416,51 @@ function createGrass() {
   totalGrass = 0;
 
   const fenceInner = FENCE_SIZE - 0.5;
+  
   for (let x = -fenceInner; x < fenceInner; x += 1 / GRASS_DENSITY) {
     for (let z = -fenceInner; z < fenceInner; z += 1 / GRASS_DENSITY) {
       if (isInHouseArea(x, z) || isOnPath(x, z) || isOnDeck(x, z)) continue;
 
       const stripeIndex = Math.floor((x + fenceInner) * 2);
       const isLightStripe = stripeIndex % 2 === 0;
+      
+      // Create a cluster of grass blades for more natural look
+      const clusterGroup = new THREE.Group();
+      const numBlades = 3 + Math.floor(Math.random() * 3); // 3-5 blades per cluster
+      
+      for (let b = 0; b < numBlades; b++) {
+        // Vary the grass color slightly for natural look
+        const colorVariation = 0.9 + Math.random() * 0.2;
+        const baseColor = isLightStripe ? COLORS.grassTall : darkenColor(COLORS.grassTall, 0.92);
+        const variedColor = darkenColor(baseColor, colorVariation);
+        
+        const bladeHeight = 0.25 + Math.random() * 0.2;
+        const bladeGeo = new THREE.ConeGeometry(0.015 + Math.random() * 0.01, bladeHeight, 3);
+        const bladeMat = new THREE.MeshLambertMaterial({ color: variedColor });
 
-      const bladeGeo = new THREE.ConeGeometry(0.04, 0.4, 4);
-      const bladeMat = new THREE.MeshLambertMaterial({ 
-        color: isLightStripe ? COLORS.grassTall : darkenColor(COLORS.grassTall, 0.92)
-      });
-
-      const blade = new THREE.Mesh(bladeGeo, bladeMat.clone());
-      blade.position.set(
-        x + (Math.random() - 0.5) * 0.1,
-        0.2,
-        z + (Math.random() - 0.5) * 0.1
+        const blade = new THREE.Mesh(bladeGeo, bladeMat);
+        blade.position.set(
+          (Math.random() - 0.5) * 0.08,
+          bladeHeight / 2,
+          (Math.random() - 0.5) * 0.08
+        );
+        blade.rotation.x = (Math.random() - 0.5) * 0.4;
+        blade.rotation.z = (Math.random() - 0.5) * 0.4;
+        clusterGroup.add(blade);
+      }
+      
+      clusterGroup.position.set(
+        x + (Math.random() - 0.5) * 0.05,
+        0,
+        z + (Math.random() - 0.5) * 0.05
       );
-      blade.rotation.x = (Math.random() - 0.5) * 0.2;
-      blade.rotation.z = (Math.random() - 0.5) * 0.2;
-      blade.scale.y = 0.8 + Math.random() * 0.4;
-      blade.userData.isTall = true;
-      blade.userData.stripeLight = isLightStripe;
-      blade.userData.swayOffset = Math.random() * Math.PI * 2;
-      blade.castShadow = true;
+      clusterGroup.userData.isTall = true;
+      clusterGroup.userData.stripeLight = isLightStripe;
+      clusterGroup.userData.swayOffset = Math.random() * Math.PI * 2;
+      clusterGroup.castShadow = true;
 
-      grassBlades.push(blade);
-      scene.add(blade);
+      grassBlades.push(clusterGroup);
+      scene.add(clusterGroup);
       totalGrass++;
     }
   }
@@ -1761,6 +1888,34 @@ function playCatMeow() {
   osc.stop(audioContext.currentTime + 0.5);
 }
 
+function playWifeWhistle() {
+  if (!audioContext) return;
+  
+  // Two-tone whistle
+  const notes = [800, 1000, 800, 600];
+  const noteDuration = 0.2;
+  
+  notes.forEach((freq, i) => {
+    const osc = audioContext.createOscillator();
+    const gain = audioContext.createGain();
+    
+    osc.type = 'sine';
+    const startTime = audioContext.currentTime + i * noteDuration;
+    osc.frequency.setValueAtTime(freq, startTime);
+    
+    gain.gain.setValueAtTime(0, startTime);
+    gain.gain.linearRampToValueAtTime(0.1, startTime + 0.02);
+    gain.gain.setValueAtTime(0.1, startTime + noteDuration - 0.05);
+    gain.gain.linearRampToValueAtTime(0, startTime + noteDuration);
+    
+    osc.connect(gain);
+    gain.connect(audioContext.destination);
+    
+    osc.start(startTime);
+    osc.stop(startTime + noteDuration);
+  });
+}
+
 function setupControls() {
   window.addEventListener('keydown', (e) => {
     if (e.code === 'KeyW') keys.w = true;
@@ -1817,6 +1972,37 @@ function setupControls() {
         }
       }
     }
+    
+    // Painting in level 2
+    if (currentLevel === 2 && isPointerLocked) {
+      // Raycast to find paint sections
+      const raycaster = new THREE.Raycaster();
+      raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+      
+      const intersects = raycaster.intersectObjects(paintSections);
+      if (intersects.length > 0) {
+        const section = intersects[0].object;
+        if (!section.userData.painted && intersects[0].distance < 4) {
+          section.userData.painted = true;
+          section.material.color.setHex(0xFFFFF0); // White paint
+          paintProgress++;
+          
+          // Play paint sound
+          if (audioContext) {
+            const osc = audioContext.createOscillator();
+            const gain = audioContext.createGain();
+            osc.type = 'sine';
+            osc.frequency.value = 200 + Math.random() * 100;
+            gain.gain.setValueAtTime(0.05, audioContext.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.1);
+            osc.connect(gain);
+            gain.connect(audioContext.destination);
+            osc.start();
+            osc.stop(audioContext.currentTime + 0.1);
+          }
+        }
+      }
+    }
   });
 }
 
@@ -1842,18 +2028,34 @@ function onWindowResize() {
 }
 
 function restartGame() {
+  // Reset to level 1
+  currentLevel = 1;
+  
+  // Reset grass
   grassBlades.forEach(blade => scene.remove(blade));
   createGrass();
+  
+  // Reset paint sections
+  paintSections.forEach(section => {
+    section.visible = false;
+    section.userData.painted = false;
+  });
+  paintProgress = 0;
+  
+  // Reset player
   playerPos.set(-6, 1.5, 10);
   playerYaw = 0;
   playerPitch = 0;
   playerHealth = 100;
   completed = false;
+  
+  // Reset neighbor
   neighborState = 'waiting';
   neighborAnger = 0;
   isPunching = false;
   neighbor.visible = false;
   neighbor.position.set(-FENCE_SIZE - 6, 0, 0);
+  
   // Reset dog
   if (dog) {
     dog.position.set(5, 0, 8);
@@ -1864,8 +2066,29 @@ function restartGame() {
     dogBarkedAtNeighbor = false;
     dog.userData.backRight.rotation.z = 0;
   }
+  
   // Reset cat
   catMeowCooldown = 0;
+  
+  // Reset wife
+  wifeState = 'inside';
+  wifeTimer = 0;
+  wifeNextAppearance = 10 + Math.random() * 20;
+  if (wife) wife.visible = false;
+  
+  // Show mower, hide paintbrush
+  if (mower) mower.visible = true;
+  if (fpMowerHandle) fpMowerHandle.visible = true;
+  
+  // Remove paintbrush if exists
+  const paintbrush = camera.getObjectByName('paintbrush');
+  if (paintbrush) camera.remove(paintbrush);
+  
+  // Reset HUD
+  document.getElementById('grass-display').innerHTML = '🌿 Græs slået: <span id="grass-percent">0</span>%';
+  document.querySelector('.modal-content h2').textContent = '🎉 Græsset er slået!';
+  document.getElementById('restart-btn').textContent = '🔄 Ny dag';
+  document.getElementById('restart-btn').onclick = restartGame;
   // Reset gate
   if (gardenGate) {
     gardenGate.rotation.y = Math.PI / 2;
@@ -2100,7 +2323,13 @@ function update() {
   updateNeighbor();
   updateDog();
   updateCat();
-  checkMowing();
+  updateWife();
+  
+  if (currentLevel === 1) {
+    checkMowing();
+  } else if (currentLevel === 2) {
+    checkPainting();
+  }
   updateHUD();
   checkCompletion();
 }
@@ -2236,48 +2465,286 @@ function updateCat() {
   }
 }
 
+function updateWife() {
+  if (!wife) return;
+  
+  const time = clock.getElapsedTime();
+  
+  if (wifeState === 'inside') {
+    wifeTimer += 0.016;
+    if (wifeTimer >= wifeNextAppearance) {
+      wifeState = 'coming_out';
+      wife.visible = true;
+      wife.position.set(0, 0, 3.5); // At door
+      wife.rotation.y = 0;
+      wifeTimer = 0;
+    }
+  }
+  
+  if (wifeState === 'coming_out') {
+    // Walk out of house
+    wife.position.z += 0.03;
+    
+    // Walking animation
+    const walkCycle = Math.sin(time * 10) * 0.3;
+    wife.userData.leftLeg.rotation.x = walkCycle;
+    wife.userData.rightLeg.rotation.x = -walkCycle;
+    
+    if (wife.position.z >= 5.5) {
+      wifeState = 'whistling';
+      wifeTimer = 0;
+      // Whistle!
+      if (audioContext) playWifeWhistle();
+      // Wave arm
+      wife.userData.rightArm.rotation.z = -0.5;
+      wife.userData.rightArm.rotation.x = -1.2;
+    }
+  }
+  
+  if (wifeState === 'whistling') {
+    wifeTimer += 0.016;
+    
+    // Waving animation
+    wife.userData.rightArm.rotation.x = -1.2 + Math.sin(time * 8) * 0.3;
+    
+    if (wifeTimer >= 3) {
+      wifeState = 'going_in';
+      wife.userData.rightArm.rotation.z = 0;
+      wife.userData.rightArm.rotation.x = 0;
+      wife.rotation.y = Math.PI; // Turn around
+    }
+  }
+  
+  if (wifeState === 'going_in') {
+    wife.position.z -= 0.03;
+    
+    const walkCycle = Math.sin(time * 10) * 0.3;
+    wife.userData.leftLeg.rotation.x = walkCycle;
+    wife.userData.rightLeg.rotation.x = -walkCycle;
+    
+    if (wife.position.z <= 3.5) {
+      wifeState = 'inside';
+      wife.visible = false;
+      wifeTimer = 0;
+      wifeNextAppearance = 15 + Math.random() * 30; // Next appearance
+    }
+  }
+}
+
 function checkMowing() {
-  grassBlades.forEach(blade => {
-    if (!blade.userData.isTall) return;
+  grassBlades.forEach(cluster => {
+    if (!cluster.userData.isTall) return;
 
     const dist = Math.sqrt(
-      Math.pow(blade.position.x - mower.position.x, 2) +
-      Math.pow(blade.position.z - mower.position.z, 2)
+      Math.pow(cluster.position.x - mower.position.x, 2) +
+      Math.pow(cluster.position.z - mower.position.z, 2)
     );
 
     if (dist < MOW_RADIUS) {
-      blade.userData.isTall = false;
-      // Stripe pattern based on mow direction
-      const stripeColor = blade.userData.stripeLight ? COLORS.grassStripeLight : COLORS.grassStripeDark;
-      blade.material.color.setHex(stripeColor);
-      blade.scale.y = 0.12;
-      blade.position.y = 0.03;
+      cluster.userData.isTall = false;
+      // Cut the grass - make all blades in cluster short
+      const stripeColor = cluster.userData.stripeLight ? COLORS.grassStripeLight : COLORS.grassStripeDark;
+      cluster.children.forEach(blade => {
+        blade.material.color.setHex(stripeColor);
+        blade.scale.set(1.2, 0.15, 1.2);
+        blade.position.y = 0.02;
+      });
     }
   });
 }
 
+function checkPainting() {
+  // Check if player is near unpainted house sections and clicking
+  // Painting happens through click handler
+}
+
+function createPaintSections() {
+  paintSections = [];
+  
+  // Create clickable paint sections on house walls
+  const sectionMat = new THREE.MeshLambertMaterial({ 
+    color: COLORS.houseWall,
+    transparent: true,
+    opacity: 0.9
+  });
+  
+  const paintedMat = new THREE.MeshLambertMaterial({ color: 0xFFFFF0 }); // Fresh white paint
+  
+  // Front wall sections (visible from yard)
+  const wallPositions = [
+    // Front wall - left of door
+    { x: -2.5, y: 2.5, z: 4.02, w: 2, h: 2 },
+    { x: -2.5, y: 0.8, z: 4.02, w: 2, h: 1.2 },
+    // Front wall - right of door
+    { x: 2.5, y: 2.5, z: 4.02, w: 2, h: 2 },
+    { x: 2.5, y: 0.8, z: 4.02, w: 2, h: 1.2 },
+    // Front wall - above door
+    { x: 0, y: 3.5, z: 4.02, w: 1.5, h: 1 },
+    // Left wall sections
+    { x: -4.02, y: 2.5, z: 0, w: 2, h: 2, rotY: Math.PI / 2 },
+    { x: -4.02, y: 2.5, z: -2, w: 2, h: 2, rotY: Math.PI / 2 },
+    { x: -4.02, y: 0.8, z: 1, w: 2, h: 1.2, rotY: Math.PI / 2 },
+    // Right wall sections
+    { x: 4.02, y: 2.5, z: 0, w: 2, h: 2, rotY: -Math.PI / 2 },
+    { x: 4.02, y: 2.5, z: -2, w: 2, h: 2, rotY: -Math.PI / 2 },
+    { x: 4.02, y: 0.8, z: 1, w: 2, h: 1.2, rotY: -Math.PI / 2 },
+  ];
+  
+  wallPositions.forEach((pos, index) => {
+    const section = new THREE.Mesh(
+      new THREE.PlaneGeometry(pos.w, pos.h),
+      sectionMat.clone()
+    );
+    section.position.set(pos.x, pos.y, pos.z);
+    if (pos.rotY) section.rotation.y = pos.rotY;
+    section.userData.painted = false;
+    section.userData.index = index;
+    section.visible = false; // Hidden until level 2
+    paintSections.push(section);
+    scene.add(section);
+  });
+  
+  totalPaintSections = paintSections.length;
+}
+
 function updateHUD() {
-  const mowed = grassBlades.filter(b => !b.userData.isTall).length;
-  const percent = Math.floor((mowed / totalGrass) * 100);
-  document.getElementById('grass-percent').textContent = percent;
+  if (currentLevel === 1) {
+    const mowed = grassBlades.filter(b => !b.userData.isTall).length;
+    const percent = Math.floor((mowed / totalGrass) * 100);
+    document.getElementById('grass-percent').textContent = percent;
+  } else if (currentLevel === 2) {
+    const painted = paintSections.filter(s => s.userData.painted).length;
+    const percent = Math.floor((painted / totalPaintSections) * 100);
+    document.getElementById('grass-percent').textContent = percent;
+  }
   document.getElementById('money').textContent = money;
 }
 
 function checkCompletion() {
-  const mowed = grassBlades.filter(b => !b.userData.isTall).length;
-  const percent = (mowed / totalGrass) * 100;
+  if (currentLevel === 1) {
+    const mowed = grassBlades.filter(b => !b.userData.isTall).length;
+    const percent = (mowed / totalGrass) * 100;
 
-  if (percent >= 100 && !completed) {
-    completed = true;
-    money += MOW_REWARD;
-    document.getElementById('reward-amount').textContent = MOW_REWARD;
-    document.getElementById('money').textContent = money;
-    document.exitPointerLock();
+    if (percent >= 100 && !completed) {
+      completed = true;
+      money += MOW_REWARD;
+      document.getElementById('reward-amount').textContent = MOW_REWARD;
+      document.getElementById('money').textContent = money;
+      document.exitPointerLock();
 
-    setTimeout(() => {
+      // Show completion modal with option to continue to level 2
       document.getElementById('completion-modal').classList.remove('hidden');
-    }, 500);
+      document.getElementById('restart-btn').textContent = '🎨 Mal huset';
+      document.getElementById('restart-btn').onclick = startLevel2;
+    }
+  } else if (currentLevel === 2) {
+    const painted = paintSections.filter(s => s.userData.painted).length;
+    const percent = (painted / totalPaintSections) * 100;
+    
+    if (percent >= 100 && !completed) {
+      completed = true;
+      money += PAINT_REWARD;
+      document.getElementById('reward-amount').textContent = PAINT_REWARD;
+      document.getElementById('money').textContent = money;
+      document.exitPointerLock();
+      
+      document.getElementById('completion-modal').classList.remove('hidden');
+      document.querySelector('.modal-content h2').textContent = '🎨 Huset er malet!';
+      document.getElementById('restart-btn').textContent = '🔄 Spil igen';
+      document.getElementById('restart-btn').onclick = restartGame;
+    }
   }
+}
+
+function startLevel2() {
+  currentLevel = 2;
+  completed = false;
+  
+  // Hide grass (already mowed)
+  grassBlades.forEach(blade => {
+    blade.visible = false;
+  });
+  
+  // Create and show paint sections
+  if (paintSections.length === 0) {
+    createPaintSections();
+  }
+  paintSections.forEach(section => {
+    section.visible = true;
+    section.userData.painted = false;
+    section.material.color.setHex(COLORS.houseWall);
+  });
+  
+  // Hide mower, show paintbrush
+  if (mower) mower.visible = false;
+  if (fpMowerHandle) fpMowerHandle.visible = false;
+  createFirstPersonPaintbrush();
+  
+  // Update HUD
+  document.getElementById('grass-display').innerHTML = '🎨 Malet: <span id="grass-percent">0</span>%';
+  
+  // Close modal and resume
+  document.getElementById('completion-modal').classList.add('hidden');
+  renderer.domElement.requestPointerLock();
+}
+
+function createFirstPersonPaintbrush() {
+  // Remove mower handle if exists
+  if (fpMowerHandle && camera.children.includes(fpMowerHandle)) {
+    fpMowerHandle.visible = false;
+  }
+  
+  const brush = new THREE.Group();
+  
+  const handleMat = new THREE.MeshLambertMaterial({ color: 0x8B4513 });
+  const bristleMat = new THREE.MeshLambertMaterial({ color: 0xFFFFE0 });
+  const paintMat = new THREE.MeshLambertMaterial({ color: 0xFFFFF0 }); // White paint
+  const skinMat = new THREE.MeshLambertMaterial({ color: 0xDEB887 });
+  const shirtMat = new THREE.MeshLambertMaterial({ color: 0xB22222 });
+  
+  // Brush handle
+  const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.025, 0.35, 8), handleMat);
+  handle.rotation.x = -0.3;
+  handle.position.set(0.15, -0.2, -0.4);
+  brush.add(handle);
+  
+  // Brush head (bristles)
+  const bristles = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.03, 0.08), bristleMat);
+  bristles.position.set(0.15, -0.32, -0.52);
+  bristles.rotation.x = -0.3;
+  brush.add(bristles);
+  
+  // Paint on bristles
+  const paint = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.02, 0.08), paintMat);
+  paint.position.set(0.15, -0.34, -0.52);
+  paint.rotation.x = -0.3;
+  brush.add(paint);
+  
+  // Right hand holding brush
+  const hand = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 6), skinMat);
+  hand.position.set(0.15, -0.12, -0.32);
+  hand.scale.set(1.2, 0.7, 0.9);
+  brush.add(hand);
+  
+  // Right sleeve
+  const sleeve = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.07, 0.18, 8), shirtMat);
+  sleeve.rotation.z = -0.3;
+  sleeve.position.set(0.22, -0.05, -0.25);
+  brush.add(sleeve);
+  
+  // Left hand resting
+  const leftHand = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 6), skinMat);
+  leftHand.position.set(-0.2, -0.25, -0.35);
+  leftHand.scale.set(1.2, 0.7, 0.9);
+  brush.add(leftHand);
+  
+  const leftSleeve = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.07, 0.18, 8), shirtMat);
+  leftSleeve.rotation.z = 0.5;
+  leftSleeve.position.set(-0.28, -0.18, -0.28);
+  brush.add(leftSleeve);
+  
+  brush.name = 'paintbrush';
+  camera.add(brush);
 }
 
 function animate() {
