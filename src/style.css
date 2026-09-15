@@ -88,6 +88,96 @@ body {
   font-weight: 400;
 }
 
+#health-bar {
+  position: fixed;
+  top: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(26, 32, 44, 0.9);
+  padding: 10px 20px;
+  border-radius: 10px;
+  border: 2px solid rgba(255, 100, 100, 0.3);
+  z-index: 10;
+}
+
+#health-bar.hidden {
+  display: none;
+}
+
+.health-label {
+  color: #fc8181;
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 6px;
+  text-align: center;
+}
+
+.health-track {
+  width: 200px;
+  height: 16px;
+  background: #2d3748;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.health-fill {
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, #fc8181, #f56565);
+  transition: width 0.3s ease;
+  border-radius: 8px;
+}
+
+#dialog-box {
+  position: fixed;
+  bottom: 100px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
+  animation: slideUp 0.3s ease-out;
+}
+
+#dialog-box.hidden {
+  display: none;
+}
+
+@keyframes slideUp {
+  from { transform: translateX(-50%) translateY(20px); opacity: 0; }
+  to { transform: translateX(-50%) translateY(0); opacity: 1; }
+}
+
+.dialog-content {
+  background: rgba(26, 32, 44, 0.95);
+  padding: 24px 32px;
+  border-radius: 16px;
+  border: 3px solid #e53e3e;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+  min-width: 400px;
+  max-width: 600px;
+}
+
+.dialog-speaker {
+  color: #fc8181;
+  font-size: 14px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 10px;
+}
+
+.dialog-text {
+  color: #fff;
+  font-size: 18px;
+  line-height: 1.5;
+  margin-bottom: 16px;
+}
+
+.dialog-hint {
+  color: #a0aec0;
+  font-size: 12px;
+  text-align: right;
+}
+
 #completion-modal {
   position: fixed;
   top: 0;
@@ -190,6 +280,38 @@ body {
   transform: translateY(-1px);
 }
 
+.crosshair {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 20px;
+  height: 20px;
+  pointer-events: none;
+  z-index: 15;
+}
+
+.crosshair::before,
+.crosshair::after {
+  content: '';
+  position: absolute;
+  background: rgba(255, 255, 255, 0.8);
+}
+
+.crosshair::before {
+  width: 2px;
+  height: 20px;
+  left: 9px;
+  top: 0;
+}
+
+.crosshair::after {
+  width: 20px;
+  height: 2px;
+  left: 0;
+  top: 9px;
+}
+
 @media (max-width: 700px) {
   #hud {
     flex-direction: column;
@@ -210,5 +332,10 @@ body {
   .modal-content {
     margin: 20px;
     padding: 32px;
+  }
+  
+  .dialog-content {
+    min-width: 300px;
+    padding: 20px;
   }
 }

@@ -10,7 +10,6 @@ const MOW_REWARD = 100;
 let scene, camera, renderer;
 let mower;
 let grassBlades = [];
-let cutGrassCount = 0;
 let totalGrass = 0;
 let money = 0;
 let completed = false;
@@ -21,7 +20,13 @@ let playerYaw = 0;
 let playerPitch = 0;
 let isPointerLocked = false;
 
-const keys = { w: false, a: false, s: false, d: false };
+let neighbor = null;
+let neighborState = 'waiting';
+let neighborAnger = 0;
+let showingDialog = false;
+let playerHealth = 100;
+
+const keys = { w: false, a: false, s: false, d: false, space: false };
 
 const COLORS = {
   sky: 0x87CEEB,
@@ -36,9 +41,12 @@ const COLORS = {
   mower: 0xE53935,
   mowerBody: 0x2D2D2D,
   path: 0xD4C4A8,
-  fence: 0xFFFFFF,
+  fence: 0xFAF8F5,
   tree: 0x2E7D32,
   trunk: 0x5D4037,
+  neighborShirt: 0xCC3333,
+  neighborSkin: 0xD4A574,
+  neighborPants: 0x2D4A6D,
 };
 
 function init() {
@@ -73,23 +81,29 @@ function init() {
 
   createGround();
   createHouse();
+  createNeighborHouse();
   createPath();
   createGrass();
   createMower();
-  createFence();
+  createPicketFence();
   createTrees();
+  createNeighbor();
 
   setupControls();
   window.addEventListener('resize', onWindowResize);
   document.getElementById('restart-btn').addEventListener('click', restartGame);
 
   renderer.domElement.addEventListener('click', () => {
-    renderer.domElement.requestPointerLock();
+    if (!showingDialog) {
+      renderer.domElement.requestPointerLock();
+    }
   });
 
   document.addEventListener('pointerlockchange', () => {
     isPointerLocked = document.pointerLockElement === renderer.domElement;
-    document.getElementById('click-prompt').style.display = isPointerLocked ? 'none' : 'flex';
+    if (!showingDialog) {
+      document.getElementById('click-prompt').style.display = isPointerLocked ? 'none' : 'flex';
+    }
   });
 
   animate();
@@ -156,6 +170,34 @@ function createHouse() {
   scene.add(house);
 }
 
+function createNeighborHouse() {
+  const house = new THREE.Group();
+
+  const wallGeo = new THREE.BoxGeometry(5, 3.5, 4);
+  const wallMat = new THREE.MeshLambertMaterial({ color: 0xB8860B });
+  const walls = new THREE.Mesh(wallGeo, wallMat);
+  walls.position.y = 1.75;
+  walls.castShadow = true;
+  house.add(walls);
+
+  const roofGeo = new THREE.ConeGeometry(4, 2, 4);
+  const roofMat = new THREE.MeshLambertMaterial({ color: 0x4A4A4A });
+  const roof = new THREE.Mesh(roofGeo, roofMat);
+  roof.position.y = 4.5;
+  roof.rotation.y = Math.PI / 4;
+  roof.castShadow = true;
+  house.add(roof);
+
+  const doorGeo = new THREE.BoxGeometry(0.9, 2, 0.1);
+  const doorMat = new THREE.MeshLambertMaterial({ color: 0x8B0000 });
+  const door = new THREE.Mesh(doorGeo, doorMat);
+  door.position.set(0, 1, 2.01);
+  house.add(door);
+
+  house.position.set(-18, 0, 0);
+  scene.add(house);
+}
+
 function createPath() {
   const pathGeo = new THREE.PlaneGeometry(2, 10);
   const pathMat = new THREE.MeshLambertMaterial({ color: COLORS.path });
@@ -179,43 +221,91 @@ function createPath() {
   }
 }
 
-function createFence() {
-  const postGeo = new THREE.BoxGeometry(0.12, 1, 0.12);
-  const postMat = new THREE.MeshLambertMaterial({ color: COLORS.fence });
-  const railGeo = new THREE.BoxGeometry(0.06, 0.06, 2);
+function createPicketFence() {
+  const fenceMat = new THREE.MeshLambertMaterial({ color: COLORS.fence });
+  
+  const createPicket = (x, z, rotY = 0) => {
+    const picket = new THREE.Group();
+    
+    const postGeo = new THREE.BoxGeometry(0.08, 1.0, 0.02);
+    const post = new THREE.Mesh(postGeo, fenceMat);
+    post.position.y = 0.5;
+    picket.add(post);
+    
+    const pointGeo = new THREE.ConeGeometry(0.055, 0.15, 4);
+    const point = new THREE.Mesh(pointGeo, fenceMat);
+    point.position.y = 1.08;
+    point.rotation.y = Math.PI / 4;
+    picket.add(point);
+    
+    picket.position.set(x, 0, z);
+    picket.rotation.y = rotY;
+    picket.castShadow = true;
+    return picket;
+  };
 
-  for (let i = -10; i <= 10; i += 2) {
-    if (Math.abs(i) < 1.5) continue;
-
-    [[i, 10], [10, i], [-10, i]].forEach(([x, z]) => {
-      const post = new THREE.Mesh(postGeo, postMat);
-      post.position.set(x, 0.5, z);
-      post.castShadow = true;
-      scene.add(post);
+  const createFenceSection = (startX, startZ, endX, endZ, count) => {
+    const section = new THREE.Group();
+    
+    for (let i = 0; i <= count; i++) {
+      const t = i / count;
+      const x = startX + (endX - startX) * t;
+      const z = startZ + (endZ - startZ) * t;
+      const picket = createPicket(x, z);
+      section.add(picket);
+    }
+    
+    const railGeo = new THREE.BoxGeometry(
+      Math.sqrt(Math.pow(endX - startX, 2) + Math.pow(endZ - startZ, 2)) + 0.1,
+      0.06, 0.02
+    );
+    const angle = Math.atan2(endZ - startZ, endX - startX);
+    
+    [0.25, 0.65].forEach(y => {
+      const rail = new THREE.Mesh(railGeo, fenceMat);
+      rail.position.set((startX + endX) / 2, y, (startZ + endZ) / 2);
+      rail.rotation.y = -angle;
+      section.add(rail);
     });
+    
+    return section;
+  };
+
+  const fenceSize = 10;
+  const picketSpacing = 0.18;
+  
+  for (let x = -fenceSize; x < fenceSize; x += 2) {
+    if (x > -1.5 && x < 1.5) continue;
+    const count = Math.floor(2 / picketSpacing);
+    const section = createFenceSection(x, fenceSize, x + 2, fenceSize, count);
+    scene.add(section);
   }
 
-  for (let i = -10; i < 10; i += 2) {
-    if (i > -2 && i < 1) continue;
-
-    [0.3, 0.7].forEach(y => {
-      const rail = new THREE.Mesh(railGeo, postMat);
-      rail.position.set(i + 1, y, 10);
-      scene.add(rail);
-    });
-
-    [0.3, 0.7].forEach(y => {
-      const rail = new THREE.Mesh(railGeo, postMat);
-      rail.rotation.y = Math.PI / 2;
-      rail.position.set(10, y, i + 1);
-      scene.add(rail);
-
-      const rail2 = new THREE.Mesh(railGeo, postMat);
-      rail2.rotation.y = Math.PI / 2;
-      rail2.position.set(-10, y, i + 1);
-      scene.add(rail2);
-    });
+  for (let z = -fenceSize; z < fenceSize; z += 2) {
+    const count = Math.floor(2 / picketSpacing);
+    const sectionRight = createFenceSection(fenceSize, z, fenceSize, z + 2, count);
+    scene.add(sectionRight);
+    
+    if (z > -2 && z < 2) continue;
+    const sectionLeft = createFenceSection(-fenceSize, z, -fenceSize, z + 2, count);
+    scene.add(sectionLeft);
   }
+
+  const postGeo = new THREE.CylinderGeometry(0.08, 0.1, 1.3, 8);
+  const corners = [
+    [fenceSize, fenceSize], [fenceSize, -fenceSize],
+    [-fenceSize, fenceSize], [-fenceSize, -fenceSize]
+  ];
+  corners.forEach(([x, z]) => {
+    const post = new THREE.Mesh(postGeo, fenceMat);
+    post.position.set(x, 0.65, z);
+    post.castShadow = true;
+    scene.add(post);
+    
+    const cap = new THREE.Mesh(new THREE.SphereGeometry(0.1, 8, 4, 0, Math.PI * 2, 0, Math.PI / 2), fenceMat);
+    cap.position.set(x, 1.3, z);
+    scene.add(cap);
+  });
 }
 
 function createTrees() {
@@ -256,9 +346,119 @@ function createTrees() {
   });
 }
 
+function createNeighbor() {
+  neighbor = new THREE.Group();
+
+  const headGeo = new THREE.SphereGeometry(0.25, 16, 12);
+  const headMat = new THREE.MeshLambertMaterial({ color: COLORS.neighborSkin });
+  const head = new THREE.Mesh(headGeo, headMat);
+  head.position.y = 1.55;
+  head.scale.set(1, 1.1, 0.95);
+  head.castShadow = true;
+  neighbor.add(head);
+
+  const hairGeo = new THREE.SphereGeometry(0.26, 16, 8, 0, Math.PI * 2, 0, Math.PI * 0.4);
+  const hairMat = new THREE.MeshLambertMaterial({ color: 0x2D2D2D });
+  const hair = new THREE.Mesh(hairGeo, hairMat);
+  hair.position.y = 1.6;
+  neighbor.add(hair);
+
+  const eyeWhiteMat = new THREE.MeshLambertMaterial({ color: 0xFFFFFF });
+  const eyePupilMat = new THREE.MeshLambertMaterial({ color: 0x000000 });
+  
+  [-0.08, 0.08].forEach(x => {
+    const eyeWhite = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 6), eyeWhiteMat);
+    eyeWhite.position.set(x, 1.58, 0.2);
+    eyeWhite.scale.set(0.8, 1, 0.5);
+    neighbor.add(eyeWhite);
+
+    const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.025, 6, 4), eyePupilMat);
+    pupil.position.set(x, 1.58, 0.23);
+    neighbor.add(pupil);
+  });
+
+  const eyebrowMat = new THREE.MeshLambertMaterial({ color: 0x2D2D2D });
+  neighbor.userData.eyebrows = [];
+  [-0.08, 0.08].forEach((x, i) => {
+    const eyebrow = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.02, 0.02), eyebrowMat);
+    eyebrow.position.set(x, 1.68, 0.2);
+    eyebrow.rotation.z = i === 0 ? -0.4 : 0.4;
+    neighbor.add(eyebrow);
+    neighbor.userData.eyebrows.push(eyebrow);
+  });
+
+  const mouthGeo = new THREE.BoxGeometry(0.1, 0.03, 0.02);
+  const mouthMat = new THREE.MeshLambertMaterial({ color: 0x8B4513 });
+  const mouth = new THREE.Mesh(mouthGeo, mouthMat);
+  mouth.position.set(0, 1.42, 0.22);
+  neighbor.add(mouth);
+  neighbor.userData.mouth = mouth;
+
+  const torsoGeo = new THREE.CylinderGeometry(0.2, 0.25, 0.55, 12);
+  const torsoMat = new THREE.MeshLambertMaterial({ color: COLORS.neighborShirt });
+  const torso = new THREE.Mesh(torsoGeo, torsoMat);
+  torso.position.y = 1.1;
+  torso.castShadow = true;
+  neighbor.add(torso);
+
+  const armGeo = new THREE.CylinderGeometry(0.05, 0.06, 0.45, 8);
+  const armMat = new THREE.MeshLambertMaterial({ color: COLORS.neighborShirt });
+  
+  const leftArm = new THREE.Group();
+  leftArm.position.set(-0.28, 1.15, 0);
+  const leftArmMesh = new THREE.Mesh(armGeo, armMat);
+  leftArmMesh.castShadow = true;
+  leftArm.add(leftArmMesh);
+  const leftFist = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 6), headMat);
+  leftFist.position.y = -0.28;
+  leftArm.add(leftFist);
+  neighbor.add(leftArm);
+  neighbor.userData.leftArm = leftArm;
+
+  const rightArm = new THREE.Group();
+  rightArm.position.set(0.28, 1.15, 0);
+  const rightArmMesh = new THREE.Mesh(armGeo, armMat);
+  rightArmMesh.castShadow = true;
+  rightArm.add(rightArmMesh);
+  const rightFist = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 6), headMat);
+  rightFist.position.y = -0.28;
+  rightArm.add(rightFist);
+  neighbor.add(rightArm);
+  neighbor.userData.rightArm = rightArm;
+
+  const legGeo = new THREE.CylinderGeometry(0.07, 0.08, 0.5, 8);
+  const legMat = new THREE.MeshLambertMaterial({ color: COLORS.neighborPants });
+  const shoeMat = new THREE.MeshLambertMaterial({ color: 0x1A1A1A });
+
+  const leftLeg = new THREE.Group();
+  leftLeg.position.set(-0.1, 0.55, 0);
+  const leftLegMesh = new THREE.Mesh(legGeo, legMat);
+  leftLegMesh.castShadow = true;
+  leftLeg.add(leftLegMesh);
+  const leftShoe = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.08, 0.2), shoeMat);
+  leftShoe.position.set(0, -0.28, 0.04);
+  leftLeg.add(leftShoe);
+  neighbor.add(leftLeg);
+  neighbor.userData.leftLeg = leftLeg;
+
+  const rightLeg = new THREE.Group();
+  rightLeg.position.set(0.1, 0.55, 0);
+  const rightLegMesh = new THREE.Mesh(legGeo, legMat);
+  rightLegMesh.castShadow = true;
+  rightLeg.add(rightLegMesh);
+  const rightShoe = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.08, 0.2), shoeMat);
+  rightShoe.position.set(0, -0.28, 0.04);
+  rightLeg.add(rightShoe);
+  neighbor.add(rightLeg);
+  neighbor.userData.rightLeg = rightLeg;
+
+  neighbor.position.set(-15, 0, 0);
+  neighbor.visible = false;
+  scene.add(neighbor);
+}
+
 function createGrass() {
   grassBlades = [];
-  cutGrassCount = 0;
   totalGrass = 0;
 
   const bladeGeo = new THREE.ConeGeometry(0.06, 0.5, 4);
@@ -353,6 +553,12 @@ function setupControls() {
     if (e.code === 'KeyA') keys.a = true;
     if (e.code === 'KeyS') keys.s = true;
     if (e.code === 'KeyD') keys.d = true;
+    if (e.code === 'Space') keys.space = true;
+    
+    if (e.code === 'Space' && showingDialog) {
+      hideDialog();
+      neighborState = 'fighting';
+    }
   });
 
   window.addEventListener('keyup', (e) => {
@@ -360,15 +566,46 @@ function setupControls() {
     if (e.code === 'KeyA') keys.a = false;
     if (e.code === 'KeyS') keys.s = false;
     if (e.code === 'KeyD') keys.d = false;
+    if (e.code === 'Space') keys.space = false;
   });
 
   window.addEventListener('mousemove', (e) => {
-    if (!isPointerLocked) return;
+    if (!isPointerLocked || showingDialog) return;
 
     playerYaw -= e.movementX * MOUSE_SENSITIVITY;
     playerPitch -= e.movementY * MOUSE_SENSITIVITY;
     playerPitch = Math.max(-Math.PI / 3, Math.min(Math.PI / 3, playerPitch));
   });
+
+  window.addEventListener('click', () => {
+    if (neighborState === 'fighting' && isPointerLocked) {
+      const dist = playerPos.distanceTo(neighbor.position);
+      if (dist < 3) {
+        neighborAnger -= 25;
+        neighbor.position.x -= 0.5;
+        if (neighborAnger <= 0) {
+          neighborState = 'retreating';
+          showDialog('NABOEN', 'Okay okay, jeg giver op! Slå dit græs...');
+          setTimeout(hideDialog, 2000);
+        }
+      }
+    }
+  });
+}
+
+function showDialog(speaker, text) {
+  showingDialog = true;
+  document.getElementById('dialog-box').classList.remove('hidden');
+  document.getElementById('dialog-speaker').textContent = speaker;
+  document.getElementById('dialog-text').textContent = text;
+  document.getElementById('click-prompt').style.display = 'none';
+  document.exitPointerLock();
+}
+
+function hideDialog() {
+  showingDialog = false;
+  document.getElementById('dialog-box').classList.add('hidden');
+  renderer.domElement.requestPointerLock();
 }
 
 function onWindowResize() {
@@ -383,13 +620,111 @@ function restartGame() {
   playerPos.set(-6, 1.6, 6);
   playerYaw = 0;
   playerPitch = 0;
+  playerHealth = 100;
   completed = false;
+  neighborState = 'waiting';
+  neighborAnger = 0;
+  neighbor.visible = false;
+  neighbor.position.set(-15, 0, 0);
   document.getElementById('completion-modal').classList.add('hidden');
+  document.getElementById('health-bar').classList.add('hidden');
   updateHUD();
 }
 
+function updateNeighbor() {
+  const time = clock.getElapsedTime();
+  const mowed = grassBlades.filter(b => !b.userData.isTall).length;
+  const percent = (mowed / totalGrass) * 100;
+
+  if (neighborState === 'waiting' && percent > 20) {
+    neighborState = 'approaching';
+    neighbor.visible = true;
+    neighbor.position.set(-12, 0, 0);
+    showDialog('SUR NABO', 'HEY! Kan du ikke stoppe den larm?! Jeg prøver at sove!');
+    setTimeout(() => {
+      hideDialog();
+      showDialog('SUR NABO', 'Jeg kommer over og smadrer dig!');
+      setTimeout(hideDialog, 2000);
+    }, 2500);
+    document.getElementById('health-bar').classList.remove('hidden');
+    neighborAnger = 100;
+  }
+
+  if (neighborState === 'approaching' && !showingDialog) {
+    const dir = new THREE.Vector3();
+    dir.subVectors(playerPos, neighbor.position);
+    dir.y = 0;
+    dir.normalize();
+    
+    neighbor.position.x += dir.x * 0.04;
+    neighbor.position.z += dir.z * 0.04;
+    neighbor.lookAt(playerPos.x, neighbor.position.y, playerPos.z);
+
+    const walkCycle = Math.sin(time * 10) * 0.4;
+    neighbor.userData.leftLeg.rotation.x = walkCycle;
+    neighbor.userData.rightLeg.rotation.x = -walkCycle;
+
+    const dist = playerPos.distanceTo(neighbor.position);
+    if (dist < 2) {
+      neighborState = 'fighting';
+      showDialog('SUR NABO', 'Nu skal du få TÆSK!');
+      setTimeout(hideDialog, 1500);
+    }
+  }
+
+  if (neighborState === 'fighting' && !showingDialog) {
+    neighbor.lookAt(playerPos.x, neighbor.position.y, playerPos.z);
+    
+    const punchCycle = Math.sin(time * 8);
+    neighbor.userData.leftArm.rotation.x = punchCycle > 0 ? -punchCycle * 1.5 : 0;
+    neighbor.userData.rightArm.rotation.x = punchCycle < 0 ? punchCycle * 1.5 : 0;
+
+    neighbor.userData.eyebrows.forEach((eb, i) => {
+      eb.rotation.z = i === 0 ? -0.6 : 0.6;
+    });
+
+    const dist = playerPos.distanceTo(neighbor.position);
+    if (dist < 2 && Math.random() < 0.02) {
+      playerHealth -= 5;
+      document.getElementById('health-fill').style.width = playerHealth + '%';
+      
+      if (playerHealth <= 0) {
+        showDialog('GAME OVER', 'Naboen slog dig ud! Tryk R for at prøve igen.');
+        neighborState = 'won';
+      }
+    }
+
+    if (dist > 2) {
+      const dir = new THREE.Vector3();
+      dir.subVectors(playerPos, neighbor.position);
+      dir.y = 0;
+      dir.normalize();
+      neighbor.position.x += dir.x * 0.06;
+      neighbor.position.z += dir.z * 0.06;
+    }
+  }
+
+  if (neighborState === 'retreating') {
+    const dir = new THREE.Vector3(-15 - neighbor.position.x, 0, 0 - neighbor.position.z);
+    dir.normalize();
+    neighbor.position.x += dir.x * 0.05;
+    neighbor.position.z += dir.z * 0.05;
+    neighbor.lookAt(neighbor.position.x + dir.x, neighbor.position.y, neighbor.position.z + dir.z);
+
+    const walkCycle = Math.sin(time * 10) * 0.4;
+    neighbor.userData.leftLeg.rotation.x = walkCycle;
+    neighbor.userData.rightLeg.rotation.x = -walkCycle;
+
+    if (neighbor.position.x < -14) {
+      neighbor.visible = false;
+      neighborState = 'defeated';
+      document.getElementById('health-bar').classList.add('hidden');
+    }
+  }
+}
+
 function update() {
-  if (completed) return;
+  if (completed || neighborState === 'won') return;
 
   const moveDir = new THREE.Vector3();
   
@@ -398,7 +733,7 @@ function update() {
   if (keys.a) moveDir.x -= 1;
   if (keys.d) moveDir.x += 1;
 
-  if (moveDir.length() > 0) {
+  if (moveDir.length() > 0 && !showingDialog) {
     moveDir.normalize();
     moveDir.applyAxisAngle(new THREE.Vector3(0, 1, 0), playerYaw);
     
@@ -428,6 +763,7 @@ function update() {
     }
   });
 
+  updateNeighbor();
   checkMowing();
   updateHUD();
   checkCompletion();
