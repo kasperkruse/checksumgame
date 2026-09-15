@@ -46,7 +46,8 @@ export class RagdollController {
       this.enable('temporary', dir, 13);
     });
 
-    this.bus.on(GameEvents.PLAYER_RAGDOLLED, (dir) => {
+    this.bus.on(GameEvents.PLAYER_RAGDOLLED, (dir, attacker) => {
+      this.attacker = attacker; // whoever landed the grab drags the body
       this.enable('terminal', dir, 9);
     });
 
@@ -81,13 +82,12 @@ export class RagdollController {
       this.minFlopTime = 1.6;
       this.recoverTimer = 3.2; // hard cap so we always recover
     } else {
-      // Terminal: the neighbor grabs the body. The joint keeps it near his hand.
-      this.joint = new DistanceJoint(
-        () => this.ctx.getNeighborHandPos(),
-        this.body,
-        0.7,
-        0.35
-      );
+      // Terminal: the attacker grabs the body. The joint keeps it near their
+      // hand as they haul it to the property line.
+      const anchorFn = this.attacker
+        ? () => this.attacker.getHandPos()
+        : () => this.ctx.getNeighborHandPos();
+      this.joint = new DistanceJoint(anchorFn, this.body, 0.7, 0.35);
       if (this.ctx.onPlayerCaught) this.ctx.onPlayerCaught();
     }
   }

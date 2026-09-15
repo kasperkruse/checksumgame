@@ -61,28 +61,30 @@ export class ProjectileSystem {
   }
 
   update(dt) {
-    const neighbor = this.ctx.neighbor;
-    const neighborActive = this.ctx.isNeighborActive();
+    // Every antagonist (the grumpy old man AND his wife) is a candidate target.
+    const antagonists = this.ctx.getAntagonists();
 
     for (const p of this.projectiles) {
       p.life -= dt;
       p.body.integrate(dt);
 
-      // Check impact with the neighbor (torso height sphere).
-      if (!p.hit && neighborActive && neighbor.visible) {
-        const np = neighbor.position;
-        const dx = np.x - p.mesh.position.x;
-        const dy = (np.y + 1.1) - p.mesh.position.y;
-        const dz = np.z - p.mesh.position.z;
-        if (dx * dx + dy * dy + dz * dz < 0.65 * 0.65) {
-          p.hit = true;
-          const impactDir = new THREE.Vector3(p.body.velocity.x, 0, p.body.velocity.z).normalize();
-          if (p.kind === 'debris') {
-            this.bus.emit(GameEvents.NEIGHBOR_HIT_BY_PROJECTILE, impactDir);
-          } else if (p.kind === 'paint') {
-            this.bus.emit(GameEvents.NEIGHBOR_BLINDED, 4);
+      // Check impact against each active antagonist (torso-height sphere).
+      if (!p.hit) {
+        for (const a of antagonists) {
+          if (!a.isActive() || !a.mesh.visible) continue;
+          const np = a.mesh.position;
+          const dx = np.x - p.mesh.position.x;
+          const dy = (np.y + 1.1) - p.mesh.position.y;
+          const dz = np.z - p.mesh.position.z;
+          if (dx * dx + dy * dy + dz * dz < 0.65 * 0.65) {
+            p.hit = true;
+            const impactDir = new THREE.Vector3(p.body.velocity.x, 0, p.body.velocity.z).normalize();
+            // Dispatch the effect to the specific character that got hit.
+            if (p.kind === 'debris') a.staggerFromProjectile(impactDir);
+            else if (p.kind === 'paint') a.blind(4);
+            p.life = 0; // consume on hit
+            break;
           }
-          p.life = 0; // consume on hit
         }
       }
     }

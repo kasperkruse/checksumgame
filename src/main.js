@@ -34,14 +34,15 @@ let playerYaw = 0;
 let playerPitch = 0;
 let isPointerLocked = false;
 
-let neighbor = null;
+let neighbor = null; // the grumpy old man
+let wife = null;     // his equally grumpy wife
 let showingDialog = false;
 
 // ---------------------------------------------------------------------------
 // Modular gameplay systems (see src/systems/*). main.js owns the world + render
 // loop and simply wires these together through a shared EventBus + context.
 // ---------------------------------------------------------------------------
-let bus, gameState, neighborAI, mowerPhysics, projectiles, ragdoll, painting, ctx;
+let bus, gameState, neighborAI, wifeAI, mowerPhysics, projectiles, ragdoll, painting, ctx;
 let currentPhase = Phase.MOWING;
 
 // Player facade shared with every system.
@@ -219,7 +220,10 @@ function init() {
   createShrubs();
   createFlowerBeds();
   createMailbox();
-  createNeighbor();
+  createNeighborFence();
+  createSunbed();
+  createCharacters();
+  createDog();
   createObstacles();
   createPickups();
   createDecoyMarker();
@@ -1245,110 +1249,135 @@ function createMower() {
   scene.add(mower);
 }
 
-function createNeighbor() {
-  neighbor = new THREE.Group();
+/**
+ * Reusable builder for a grumpy OLD person, shared by the neighbour man and his
+ * wife. Returns a THREE.Group whose userData exposes the limb sub-groups the
+ * NeighborAI animates (leftArm/rightArm/leftLeg/rightLeg), the angry eyebrows,
+ * and a paint-splat overlay used for the Level 2 "blinded" state.
+ */
+function buildOldPerson(opts = {}) {
+  const {
+    skin = 0xE0C0A0,
+    hair = 0xCFCFCF,
+    shirt = 0x556B2F,
+    pants = 0x4A4A4A,
+    hairStyle = 'balding', // 'balding' (old man) or 'bun' (old woman)
+    glasses = true,
+    mustache = false,
+    dress = false,
+  } = opts;
 
-  // Head
-  const headGeo = new THREE.SphereGeometry(0.25, 16, 12);
-  const headMat = new THREE.MeshLambertMaterial({ color: COLORS.neighborSkin });
-  const head = new THREE.Mesh(headGeo, headMat);
-  head.position.y = 1.55;
-  head.scale.set(1, 1.1, 0.95);
-  head.castShadow = true;
-  neighbor.add(head);
+  const g = new THREE.Group();
+  const skinMat = new THREE.MeshLambertMaterial({ color: skin });
+  const hairMat = new THREE.MeshLambertMaterial({ color: hair });
 
-  // Hair
-  const hairGeo = new THREE.SphereGeometry(0.26, 16, 8, 0, Math.PI * 2, 0, Math.PI * 0.4);
-  const hairMat = new THREE.MeshLambertMaterial({ color: 0x2D2D2D });
-  const hair = new THREE.Mesh(hairGeo, hairMat);
-  hair.position.y = 1.6;
-  neighbor.add(hair);
+  // Head.
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.25, 16, 12), skinMat);
+  head.position.y = 1.55; head.scale.set(1, 1.1, 0.95); head.castShadow = true;
+  g.add(head);
 
-  // Eyes
+  // Hair - either a grey horseshoe of hair around a bald pate, or a bun.
+  if (hairStyle === 'balding') {
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.2, 0.055, 8, 18), hairMat);
+    ring.position.set(0, 1.6, -0.02); ring.rotation.x = Math.PI / 2;
+    g.add(ring);
+    // A few side tufts for a dishevelled look.
+    [-0.2, 0.2].forEach((x) => {
+      const tuft = new THREE.Mesh(new THREE.SphereGeometry(0.09, 8, 6), hairMat);
+      tuft.position.set(x, 1.62, 0); tuft.scale.set(0.7, 0.6, 0.9);
+      g.add(tuft);
+    });
+  } else {
+    const sideHair = new THREE.Mesh(
+      new THREE.SphereGeometry(0.28, 16, 10, 0, Math.PI * 2, 0, Math.PI * 0.6), hairMat
+    );
+    sideHair.position.y = 1.6;
+    g.add(sideHair);
+    const bun = new THREE.Mesh(new THREE.SphereGeometry(0.13, 10, 8), hairMat);
+    bun.position.set(0, 1.8, -0.14);
+    g.add(bun);
+  }
+
+  // Eyes.
   const eyeWhiteMat = new THREE.MeshLambertMaterial({ color: 0xFFFFFF });
-  const eyePupilMat = new THREE.MeshLambertMaterial({ color: 0x000000 });
-  
-  [-0.08, 0.08].forEach(x => {
-    const eyeWhite = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 6), eyeWhiteMat);
-    eyeWhite.position.set(x, 1.58, 0.2);
-    eyeWhite.scale.set(0.8, 1, 0.5);
-    neighbor.add(eyeWhite);
-
-    const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.025, 6, 4), eyePupilMat);
-    pupil.position.set(x, 1.58, 0.23);
-    neighbor.add(pupil);
+  const pupilMat = new THREE.MeshLambertMaterial({ color: 0x000000 });
+  [-0.08, 0.08].forEach((x) => {
+    const w = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 6), eyeWhiteMat);
+    w.position.set(x, 1.56, 0.2); w.scale.set(0.8, 1, 0.5); g.add(w);
+    const p = new THREE.Mesh(new THREE.SphereGeometry(0.025, 6, 4), pupilMat);
+    p.position.set(x, 1.56, 0.23); g.add(p);
   });
 
-  // Angry eyebrows
-  const eyebrowMat = new THREE.MeshLambertMaterial({ color: 0x2D2D2D });
-  neighbor.userData.eyebrows = [];
-  [-0.08, 0.08].forEach((x, i) => {
-    const eyebrow = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.02, 0.02), eyebrowMat);
-    eyebrow.position.set(x, 1.68, 0.2);
-    eyebrow.rotation.z = i === 0 ? -0.4 : 0.4;
-    neighbor.add(eyebrow);
-    neighbor.userData.eyebrows.push(eyebrow);
+  // Bushy grey angry eyebrows (stored for the "flash angry" animation).
+  const browMat = new THREE.MeshLambertMaterial({ color: hair });
+  const eyebrows = [];
+  [-0.09, 0.09].forEach((x, i) => {
+    const brow = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.04, 0.05), browMat);
+    brow.position.set(x, 1.67, 0.2);
+    brow.rotation.z = i === 0 ? -0.4 : 0.4;
+    g.add(brow);
+    eyebrows.push(brow);
   });
 
-  // Mouth
-  const mouthGeo = new THREE.BoxGeometry(0.1, 0.03, 0.02);
-  const mouthMat = new THREE.MeshLambertMaterial({ color: 0x8B4513 });
-  const mouth = new THREE.Mesh(mouthGeo, mouthMat);
-  mouth.position.set(0, 1.42, 0.22);
-  neighbor.add(mouth);
+  // Reading glasses perched on the nose.
+  if (glasses) {
+    const frameMat = new THREE.MeshLambertMaterial({ color: 0x1a1a1a });
+    [-0.08, 0.08].forEach((x) => {
+      const lens = new THREE.Mesh(new THREE.TorusGeometry(0.05, 0.012, 6, 14), frameMat);
+      lens.position.set(x, 1.55, 0.22); g.add(lens);
+    });
+    const bridge = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.012, 0.012), frameMat);
+    bridge.position.set(0, 1.55, 0.24); g.add(bridge);
+  }
 
-  // Torso (red shirt)
-  const torsoGeo = new THREE.CylinderGeometry(0.2, 0.25, 0.55, 12);
-  const torsoMat = new THREE.MeshLambertMaterial({ color: COLORS.neighborShirt });
-  const torso = new THREE.Mesh(torsoGeo, torsoMat);
-  torso.position.y = 1.1;
-  torso.castShadow = true;
-  neighbor.add(torso);
+  // Grey mustache (old man) and a grumpy frown.
+  if (mustache) {
+    const mus = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.045, 0.05), hairMat);
+    mus.position.set(0, 1.45, 0.21); g.add(mus);
+  }
+  const mouth = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.03, 0.02),
+    new THREE.MeshLambertMaterial({ color: 0x7a4b3a }));
+  mouth.position.set(0, 1.4, 0.22); g.add(mouth);
 
-  // Arms
+  // Torso.
+  const torsoMat = new THREE.MeshLambertMaterial({ color: shirt });
+  const torso = new THREE.Mesh(new THREE.CylinderGeometry(0.21, 0.27, 0.58, 12), torsoMat);
+  torso.position.y = 1.08; torso.castShadow = true; g.add(torso);
+
+  // Arms (fists at the ends).
   const armGeo = new THREE.CylinderGeometry(0.05, 0.06, 0.45, 8);
-  const armMat = new THREE.MeshLambertMaterial({ color: COLORS.neighborShirt });
-  
-  const leftArm = new THREE.Group();
-  leftArm.position.set(-0.28, 1.15, 0);
-  leftArm.add(new THREE.Mesh(armGeo, armMat));
-  const leftFist = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 6), headMat);
-  leftFist.position.y = -0.28;
-  leftArm.add(leftFist);
-  neighbor.add(leftArm);
-  neighbor.userData.leftArm = leftArm;
+  const mkArm = (side) => {
+    const arm = new THREE.Group();
+    arm.position.set(0.29 * side, 1.15, 0);
+    arm.add(new THREE.Mesh(armGeo, torsoMat));
+    const fist = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 6), skinMat);
+    fist.position.y = -0.28; arm.add(fist);
+    g.add(arm);
+    return arm;
+  };
+  const leftArm = mkArm(-1);
+  const rightArm = mkArm(1);
 
-  const rightArm = new THREE.Group();
-  rightArm.position.set(0.28, 1.15, 0);
-  rightArm.add(new THREE.Mesh(armGeo, armMat));
-  const rightFist = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 6), headMat);
-  rightFist.position.y = -0.28;
-  rightArm.add(rightFist);
-  neighbor.add(rightArm);
-  neighbor.userData.rightArm = rightArm;
-
-  // Legs
+  // Legs (or a dress skirt hiding them for the wife).
+  const legMat = new THREE.MeshLambertMaterial({ color: pants });
+  const shoeMat = new THREE.MeshLambertMaterial({ color: 0x3a2a1a });
   const legGeo = new THREE.CylinderGeometry(0.07, 0.08, 0.5, 8);
-  const legMat = new THREE.MeshLambertMaterial({ color: COLORS.neighborPants });
-  const shoeMat = new THREE.MeshLambertMaterial({ color: 0x1A1A1A });
+  const mkLeg = (side) => {
+    const leg = new THREE.Group();
+    leg.position.set(0.1 * side, 0.55, 0);
+    leg.add(new THREE.Mesh(legGeo, legMat));
+    const shoe = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.08, 0.2), shoeMat);
+    shoe.position.set(0, -0.28, 0.04); leg.add(shoe);
+    g.add(leg);
+    return leg;
+  };
+  const leftLeg = mkLeg(-1);
+  const rightLeg = mkLeg(1);
 
-  const leftLeg = new THREE.Group();
-  leftLeg.position.set(-0.1, 0.55, 0);
-  leftLeg.add(new THREE.Mesh(legGeo, legMat));
-  const leftShoe = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.08, 0.2), shoeMat);
-  leftShoe.position.set(0, -0.28, 0.04);
-  leftLeg.add(leftShoe);
-  neighbor.add(leftLeg);
-  neighbor.userData.leftLeg = leftLeg;
-
-  const rightLeg = new THREE.Group();
-  rightLeg.position.set(0.1, 0.55, 0);
-  rightLeg.add(new THREE.Mesh(legGeo, legMat));
-  const rightShoe = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.08, 0.2), shoeMat);
-  rightShoe.position.set(0, -0.28, 0.04);
-  rightLeg.add(rightShoe);
-  neighbor.add(rightLeg);
-  neighbor.userData.rightLeg = rightLeg;
+  if (dress) {
+    const skirt = new THREE.Mesh(new THREE.ConeGeometry(0.36, 0.65, 12), torsoMat);
+    skirt.position.y = 0.72; skirt.castShadow = true; g.add(skirt);
+  }
 
   // Paint splatter over the face, shown only while BLINDED in Level 2.
   const paintSplat = new THREE.Group();
@@ -1360,12 +1389,174 @@ function createNeighbor() {
     paintSplat.add(blob);
   }
   paintSplat.visible = false;
-  neighbor.add(paintSplat);
-  neighbor.userData.paintSplat = paintSplat;
+  g.add(paintSplat);
 
-  neighbor.position.set(-18, 0, 0);
-  neighbor.visible = false;
+  g.userData = { leftArm, rightArm, leftLeg, rightLeg, eyebrows, paintSplat };
+  return g;
+}
+
+// Build the grumpy old man and his equally grumpy wife, and place them idle in
+// their own garden (he lounges on the sun bed, she stands nearby).
+function createCharacters() {
+  neighbor = buildOldPerson({
+    skin: 0xE0C0A0, hair: 0xD8D8D8, shirt: 0x6E5B3E, pants: 0x3f3a34,
+    hairStyle: 'balding', glasses: true, mustache: true,
+  });
   scene.add(neighbor);
+
+  wife = buildOldPerson({
+    skin: 0xE8CBB0, hair: 0xE2E2E2, shirt: 0x8E5A9E, pants: 0x6B4A78,
+    hairStyle: 'bun', glasses: true, dress: true,
+  });
+  scene.add(wife);
+}
+
+// A white picket fence enclosing the neighbours' garden, with a gap on the side
+// facing the player's yard so the couple can storm out.
+function createNeighborFence() {
+  const mat = new THREE.MeshLambertMaterial({ color: COLORS.fence });
+  const railMat = mat;
+  const minX = -31, maxX = -13, minZ = -10, maxZ = 8;
+  const spacing = 0.4;
+
+  const picket = (x, z) => {
+    const p = new THREE.Mesh(new THREE.BoxGeometry(0.09, 1.0, 0.04), mat);
+    p.position.set(x, 0.5, z); p.castShadow = true; scene.add(p);
+    const tip = new THREE.Mesh(new THREE.ConeGeometry(0.06, 0.15, 4), mat);
+    tip.position.set(x, 1.05, z); tip.rotation.y = Math.PI / 4; scene.add(tip);
+  };
+
+  for (let x = minX; x <= maxX; x += spacing) { picket(x, minZ); picket(x, maxZ); }
+  for (let z = minZ; z <= maxZ; z += spacing) {
+    picket(minX, z);
+    // Right side (toward the player): leave a gate gap around z=0.
+    if (z < -1.4 || z > 1.4) picket(maxX, z);
+  }
+  // Horizontal rails.
+  [0.3, 0.7].forEach((y) => {
+    const front = new THREE.Mesh(new THREE.BoxGeometry(maxX - minX, 0.06, 0.03), railMat);
+    front.position.set((minX + maxX) / 2, y, minZ); scene.add(front);
+    const back = front.clone(); back.position.z = maxZ; scene.add(back);
+    const left = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.06, maxZ - minZ), railMat);
+    left.position.set(minX, y, (minZ + maxZ) / 2); scene.add(left);
+  });
+}
+
+// The old man's sun lounger, parked in his garden. He reclines here until the
+// mowing noise finally drags him off it to come and fight.
+let sunbedPos = new THREE.Vector3(-20, 0, 3);
+function createSunbed() {
+  const bed = new THREE.Group();
+  const frameMat = new THREE.MeshLambertMaterial({ color: 0x2f6f77 });
+  const cushionMat = new THREE.MeshLambertMaterial({ color: 0xf0e6d2 });
+
+  // Seat.
+  const seat = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.1, 1.7), frameMat);
+  seat.position.y = 0.35; seat.castShadow = true; bed.add(seat);
+  const seatCushion = new THREE.Mesh(new THREE.BoxGeometry(0.72, 0.08, 1.5), cushionMat);
+  seatCushion.position.y = 0.44; bed.add(seatCushion);
+
+  // Inclined backrest.
+  const back = new THREE.Mesh(new THREE.BoxGeometry(0.78, 0.08, 0.7), cushionMat);
+  back.position.set(0, 0.62, -0.75); back.rotation.x = -0.6; bed.add(back);
+
+  // Legs.
+  [[-0.32, -0.7], [0.32, -0.7], [-0.32, 0.7], [0.32, 0.7]].forEach(([x, z]) => {
+    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.3, 6), frameMat);
+    leg.position.set(x, 0.17, z); bed.add(leg);
+  });
+
+  bed.position.copy(sunbedPos);
+  bed.rotation.y = Math.PI / 2; // face up toward the player's yard
+  scene.add(bed);
+}
+
+// A little ugly fluffy "cotton" dog that wanders around the neighbours' garden.
+let dog = null;
+const dogState = { target: new THREE.Vector3(-20, 0, 0), pauseTimer: 0, retarget: 0 };
+function createDog() {
+  dog = new THREE.Group();
+  const furMat = new THREE.MeshLambertMaterial({ color: 0xf2f0ec });
+  const darkMat = new THREE.MeshLambertMaterial({ color: 0x111111 });
+  const tongueMat = new THREE.MeshLambertMaterial({ color: 0xff6f8f });
+
+  // Fluffy cotton body - lumpy overlapping puffs so it looks scruffy/ugly.
+  const body = new THREE.Group();
+  for (let i = 0; i < 6; i++) {
+    const puff = new THREE.Mesh(new THREE.SphereGeometry(0.13 + Math.random() * 0.05, 8, 6), furMat);
+    puff.position.set((Math.random() - 0.5) * 0.28, 0.28 + (Math.random() - 0.5) * 0.1, (Math.random() - 0.5) * 0.4);
+    puff.castShadow = true;
+    body.add(puff);
+  }
+  dog.add(body);
+  dog.userData.body = body;
+
+  // Head with buggy asymmetric eyes and a lolling tongue (the "ugly" charm).
+  const head = new THREE.Group();
+  const skull = new THREE.Mesh(new THREE.SphereGeometry(0.15, 8, 6), furMat);
+  head.add(skull);
+  const snout = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.08, 0.12), furMat);
+  snout.position.set(0, -0.03, 0.14); head.add(snout);
+  const nose = new THREE.Mesh(new THREE.SphereGeometry(0.03, 6, 4), darkMat);
+  nose.position.set(0, 0.0, 0.21); head.add(nose);
+  const eyeL = new THREE.Mesh(new THREE.SphereGeometry(0.045, 8, 6), darkMat);
+  eyeL.position.set(-0.07, 0.06, 0.12); head.add(eyeL);
+  const eyeR = new THREE.Mesh(new THREE.SphereGeometry(0.035, 8, 6), darkMat);
+  eyeR.position.set(0.08, 0.08, 0.11); head.add(eyeR); // slightly off = googly/ugly
+  const tongue = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.02, 0.09), tongueMat);
+  tongue.position.set(0, -0.07, 0.2); head.add(tongue);
+  const earL = new THREE.Mesh(new THREE.SphereGeometry(0.06, 6, 5), furMat);
+  earL.position.set(-0.13, 0.05, 0); earL.scale.set(0.6, 1.1, 0.5); head.add(earL);
+  const earR = earL.clone(); earR.position.x = 0.13; head.add(earR);
+  head.position.set(0, 0.34, 0.28);
+  dog.add(head);
+  dog.userData.head = head;
+
+  // Stubby legs.
+  const legMat = furMat;
+  [[-0.1, 0.18], [0.1, 0.18], [-0.1, -0.18], [0.1, -0.18]].forEach(([x, z]) => {
+    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.18, 6), legMat);
+    leg.position.set(x, 0.09, z); dog.add(leg);
+  });
+
+  // A stubby tail.
+  const tail = new THREE.Mesh(new THREE.SphereGeometry(0.07, 6, 5), furMat);
+  tail.position.set(0, 0.32, -0.28); dog.add(tail);
+  dog.userData.tail = tail;
+
+  dog.position.set(-20, 0, -2);
+  scene.add(dog);
+}
+
+// Wander AI for the dog: pick a random spot inside the neighbours' fence, trot
+// to it, pause, repeat. Purely cosmetic ambiance.
+function updateDog(dt) {
+  if (!dog) return;
+  const NB = { minX: -30, maxX: -14, minZ: -9, maxZ: 7 };
+
+  if (dogState.pauseTimer > 0) {
+    dogState.pauseTimer -= dt;
+  } else {
+    const dir = new THREE.Vector3().subVectors(dogState.target, dog.position);
+    dir.y = 0;
+    const dist = dir.length();
+    if (dist < 0.4) {
+      // Arrived: sniff around for a moment, then choose a new target.
+      dogState.pauseTimer = 0.8 + Math.random() * 1.5;
+      dogState.target.set(
+        NB.minX + Math.random() * (NB.maxX - NB.minX),
+        0,
+        NB.minZ + Math.random() * (NB.maxZ - NB.minZ)
+      );
+    } else {
+      dir.normalize();
+      dog.position.addScaledVector(dir, 1.6 * dt); // trot speed
+      dog.rotation.y = Math.atan2(dir.x, dir.z);
+      // Little bounce + wagging tail while trotting.
+      dog.position.y = Math.abs(Math.sin(simTime * 12)) * 0.04;
+      if (dog.userData.tail) dog.userData.tail.rotation.x = Math.sin(simTime * 18) * 0.6;
+    }
+  }
 }
 
 // Solid props the mower crashes into (explosive knockback + player ragdoll).
@@ -1757,21 +1948,22 @@ function setupSystems() {
     exitPoint: new THREE.Vector3(-12, 0, 0),
   };
 
+  // Antagonists are filled in after their AIs are constructed below.
+  let antagonists = [];
+
   ctx = {
     scene, camera, bus, clock: timeProvider,
     player,
     neighbor,
     obstacles, pickups,
     boundary,
-    spawnPoint: new THREE.Vector3(-15, 0, 0), // outside the fence
-    gatePoint: new THREE.Vector3(-9, 0, 0),   // the garden gate opening
     isTallGrassAt,
-    isNeighborActive: () => neighborAI && neighborAI.isActive(),
-    // The neighbor's grabbing hand ~ his body; the joint keeps the ragdoll here.
+    getAntagonists: () => antagonists,
+    isNeighborActive: () => antagonists.some((a) => a.isActive()),
+    // Fallback grab anchor (RagdollController normally uses the actual catcher).
     getNeighborHandPos: () => new THREE.Vector3(neighbor.position.x, 0.6, neighbor.position.z),
     getNearestWallPoint: (pos) => painting.getNearestWallPoint(pos),
     onSabotage: (amount) => painting.sabotage(amount),
-    onPlayerCaught: () => {}, // NeighborAI already switches itself to DRAGGING
     onEquipPaintTool: (on) => setPaintToolEquipped(on),
     audio: { playHurt: playHurtSound, playCrash: playCrashSound },
     projectiles: null, // set right after the ProjectileSystem is created
@@ -1780,7 +1972,32 @@ function setupSystems() {
   gameState = new GameStateManager(bus);
   projectiles = new ProjectileSystem(ctx);
   ctx.projectiles = projectiles;
-  neighborAI = new NeighborAI(ctx);
+
+  // The grumpy old man: lounges on the sun bed, sabotages walls in Level 2.
+  neighborAI = new NeighborAI(ctx, {
+    mesh: neighbor,
+    name: 'SUR NABO',
+    baseSpeed: 3.4,
+    homePoint: new THREE.Vector3(sunbedPos.x, 0.5, sunbedPos.z),
+    homeYaw: Math.PI / 2,
+    restPose: 'recline', // rises from the sun lounger when provoked
+    gatePoint: new THREE.Vector3(-9, 0, 0),
+    level2Hunt: false,
+  });
+
+  // His wife: stands in the garden, hunts the player directly in both levels.
+  wifeAI = new NeighborAI(ctx, {
+    mesh: wife,
+    name: 'SUR KONE',
+    baseSpeed: 3.9,
+    homePoint: new THREE.Vector3(-18.5, 0, -1),
+    homeYaw: Math.PI / 2,
+    gatePoint: new THREE.Vector3(-9, 0, 0.5),
+    level2Hunt: true,
+  });
+
+  antagonists = [neighborAI, wifeAI];
+
   mowerPhysics = new MowerPhysics(ctx, mower);
   ragdoll = new RagdollController(ctx);
   painting = new PaintingSystem(ctx);
@@ -1793,12 +2010,13 @@ function setupSystems() {
 }
 
 function onNeighborSpawn() {
-  // Swing the garden gate open and let the neighbor deliver his threat.
+  // The old man leaps off his sun lounger; the gate swings open and the grumpy
+  // couple deliver their threats before storming in.
   if (gardenGate) gardenGate.rotation.y = Math.PI / 2 - 0.8;
-  showDialog('SUR NABO', 'HEY! Stop den larm! Det er søndag formiddag!');
+  showDialog('SUR NABO', 'HEY! Stop den larm! Jeg lå og hvilede mig!');
   setTimeout(() => {
     if (currentPhase === Phase.MOWING && showingDialog) {
-      showDialog('SUR NABO', 'Jeg kommer ind og SMADRER dig!');
+      showDialog('SUR KONE', 'Vent til jeg får fat i dig, din bengel!');
       setTimeout(() => { if (showingDialog) hideDialog(); }, 1800);
     }
   }, 2200);
@@ -1908,6 +2126,9 @@ function restartGame() {
 // simply step here with the shared dt.
 // ---------------------------------------------------------------------------
 function update(dt) {
+  // The dog wanders the neighbours' garden at all times (pure ambiance).
+  updateDog(dt);
+
   // While the death screen is up we still integrate the ragdoll + projectiles so
   // the "being dragged out" moment finishes playing behind the modal.
   if (currentPhase === Phase.GAME_OVER) {

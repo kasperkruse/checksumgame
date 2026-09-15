@@ -37,16 +37,30 @@ const _dir = new THREE.Vector3();
 const _target = new THREE.Vector3();
 
 export class NeighborAI {
-  constructor(ctx) {
+  /**
+   * @param {object} ctx    shared game context (bus, player, world helpers...)
+   * @param {object} config per-antagonist setup so we can run several of these
+   *   at once (the grumpy old man AND his equally grumpy wife):
+   *     mesh        - the THREE.Group for this character.
+   *     name        - label used in dialog.
+   *     spawnPoint  - where he/she appears outside the fence.
+   *     gatePoint   - the gate opening to walk in through.
+   *     baseSpeed   - units/second.
+   *     level2Hunt  - in Level 2, true = keep hunting the player, false = go
+   *                   sabotage the freshly painted walls.
+   */
+  constructor(ctx, config = {}) {
     this.ctx = ctx;
     this.bus = ctx.bus;
-    this.mesh = ctx.neighbor;
+    this.config = config;
+    this.mesh = config.mesh;
+    this.name = config.name || 'SUR NABO';
 
     this.state = NeighborState.DORMANT;
     this.phase = Phase.MOWING;
 
     // Tunable movement (units/second).
-    this.baseSpeed = 3.6;
+    this.baseSpeed = config.baseSpeed ?? 3.6;
     this.speedMultiplier = 1;      // temporary buffs/debuffs (grass, enrage)
     this.enrageTimer = 0;          // seconds of the projectile-fueled speed boost
 
@@ -61,15 +75,17 @@ export class NeighborAI {
     this.sabotageWall = null;
 
     this._bindEvents();
+    this._goHome(); // start idle at the sun lounger / in the garden
   }
 
   _bindEvents() {
     this.bus.on(GameEvents.SPAWN_NEIGHBOR, () => this._spawn());
 
-    this.bus.on(GameEvents.NEIGHBOR_HIT_BY_PROJECTILE, (impactDir) => this._onProjectileHit(impactDir));
+    // Projectile hits and paint-blinding are dispatched directly to the specific
+    // antagonist that got struck (see ProjectileSystem), not via broadcast, so
+    // one apple doesn't stagger both characters at once.
 
-    this.bus.on(GameEvents.NEIGHBOR_BLINDED, (duration) => this.blind(duration));
-
+    // A thrown decoy distracts everyone who can hear it.
     this.bus.on(GameEvents.DISTRACT_NEIGHBOR, (pos, duration) => this.distract(pos, duration));
 
     this.bus.on(GameEvents.PHASE_CHANGED, (phase) => {
@@ -120,20 +136,49 @@ export class NeighborAI {
   // ---------------------------------------------------------------------------
 
   _spawn() {
+    // Get up from the idle spot (the old man rises from his sun lounger) and
+    // march in through the gate from wherever he was lounging.
     this.mesh.visible = true;
-    this.mesh.position.copy(this.ctx.spawnPoint);
+    this.mesh.rotation.x = 0;
+    this.mesh.rotation.z = 0;
+    this.mesh.position.y = 0;
     this.speedMultiplier = 1;
     this.enrageTimer = 0;
     this.attackCooldown = 0;
     this._paintFace(false);
     this._setState(NeighborState.ENTERING);
-    if (this.ctx.onNeighborSpawned) this.ctx.onNeighborSpawned();
+  }
+
+  /**
+   * Return to the idle "home" spot. The characters stay VISIBLE while dormant so
+   * the neighbours' garden feels alive: the old man reclines on his sun lounger
+   * and his wife stands about, until the 25% mowing trigger sends them after you.
+   */
+  _goHome() {
+    const home = this.config.homePoint;
+    if (home) this.mesh.position.copy(home);
+    this.mesh.rotation.set(0, this.config.homeYaw ?? 0, 0);
+    this._applyRestPose();
+    this._paintFace(false);
+    this.mesh.visible = true;
+    this.state = NeighborState.DORMANT;
+  }
+
+  _applyRestPose() {
+    if (this.config.restPose === 'recline') {
+      // Lean back as if lounging on the sunbed.
+      this.mesh.rotation.x = -0.85;
+    }
   }
 
   _despawn() {
-    this.mesh.visible = false;
-    this._paintFace(false);
-    this._setState(NeighborState.DORMANT);
+    // "Despawn" now means go back to the idle home spot rather than vanish.
+    this._goHome();
+  }
+
+  /** Where this character's grabbing hand is (joint anchor for dragging). */
+  getHandPos() {
+    return new THREE.Vector3(this.mesh.position.x, 0.6, this.mesh.position.z);
   }
 
   _ensureActiveForLevel2() {
@@ -144,7 +189,8 @@ export class NeighborAI {
     this._setState(NeighborState.CHASING);
   }
 
-  _onProjectileHit(impactDir) {
+  /** Called by ProjectileSystem when THIS character is struck by mower debris. */
+  staggerFromProjectile(impactDir) {
     if (!this.isActive()) return;
     // A whiff of knockback + a temporary rage-fuelled speed boost.
     if (impactDir) {
@@ -181,14 +227,16 @@ export class NeighborAI {
 
   _updateEntering(dt) {
     // Walk to the garden gate first so he uses the opening in the fence.
-    const gate = this.ctx.gatePoint;
+    const gate = this.config.gatePoint || this.ctx.gatePoint;
     const reached = this._moveToward(gate, dt, 1);
     if (reached) this._setState(NeighborState.CHASING);
   }
 
   _updateChasing(dt) {
-    if (this.phase === Phase.PAINTING) {
-      // Level 2: march to the nearest wall and start sabotaging it, UNLESS the
+    // In Level 2 the wife keeps hunting the player (level2Hunt) while the old man
+    // instead marches to the walls to sabotage the fresh paint.
+    if (this.phase === Phase.PAINTING && !this.config.level2Hunt) {
+      // Level 2 (saboteur): march to the nearest wall and wreck it, UNLESS the
       // player is close enough to grab (the ragdoll threat exists in both levels).
       const distToPlayer = this.mesh.position.distanceTo(this.ctx.player.pos);
       if (distToPlayer < this.meleeRange && this.attackCooldown <= 0) {
@@ -326,7 +374,8 @@ export class NeighborAI {
     this.attackCooldown = 1.2;
     _dir.subVectors(this.ctx.player.pos, this.mesh.position); _dir.y = 0; _dir.normalize();
     this._punchPose();
-    this.bus.emit(GameEvents.PLAYER_RAGDOLLED, _dir.clone());
+    // Pass `this` so the RagdollController joints the body to whoever caught it.
+    this.bus.emit(GameEvents.PLAYER_RAGDOLLED, _dir.clone(), this);
     this._setState(NeighborState.DRAGGING);
   }
 
