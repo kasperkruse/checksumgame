@@ -2636,38 +2636,37 @@ function checkPainting() {
 function createPaintSections() {
   paintSections = [];
   
-  // Create clickable paint sections on house walls - bright red/orange so they're visible
-  const sectionMat = new THREE.MeshLambertMaterial({ 
-    color: 0xCC4444, // Red/faded color to show "needs painting"
-    side: THREE.DoubleSide // Visible from both sides
+  // Create paint sections that fully cover each wall - old peeling paint look
+  const unpaintedMat = new THREE.MeshLambertMaterial({ 
+    color: 0x8B7355, // Faded/dirty brown - needs painting!
+    side: THREE.DoubleSide
   });
   
-  // Front wall sections (visible from yard) - positioned OUTSIDE the house walls
+  // Full wall coverage sections - positioned exactly on wall surfaces
   const wallPositions = [
-    // Front wall - left of door
-    { x: -2.5, y: 2.5, z: 4.05, w: 2, h: 2 },
-    { x: -2.5, y: 0.8, z: 4.05, w: 2, h: 1.2 },
-    // Front wall - right of door
-    { x: 2.5, y: 2.5, z: 4.05, w: 2, h: 2 },
-    { x: 2.5, y: 0.8, z: 4.05, w: 2, h: 1.2 },
-    // Front wall - above door
-    { x: 0, y: 3.5, z: 4.05, w: 1.5, h: 1 },
-    // Left wall sections (facing outward from house)
-    { x: -4.05, y: 2.5, z: 0, w: 4, h: 2, rotY: Math.PI / 2 },
-    { x: -4.05, y: 0.8, z: 0, w: 4, h: 1.2, rotY: Math.PI / 2 },
-    // Right wall sections
-    { x: 4.05, y: 2.5, z: 0, w: 4, h: 2, rotY: -Math.PI / 2 },
-    { x: 4.05, y: 0.8, z: 0, w: 4, h: 1.2, rotY: -Math.PI / 2 },
-    // Back wall sections
-    { x: -2, y: 2.5, z: -4.05, w: 2, h: 2, rotY: Math.PI },
-    { x: 2, y: 2.5, z: -4.05, w: 2, h: 2, rotY: Math.PI },
-    { x: 0, y: 0.8, z: -4.05, w: 4, h: 1.2, rotY: Math.PI },
+    // Front wall - full coverage in 4 sections (avoiding door and windows)
+    { x: -3, y: 2, z: 4.01, w: 2, h: 3 },      // Left upper
+    { x: 3, y: 2, z: 4.01, w: 2, h: 3 },       // Right upper
+    { x: -3, y: 0.5, z: 4.01, w: 2, h: 1 },    // Left lower
+    { x: 3, y: 0.5, z: 4.01, w: 2, h: 1 },     // Right lower
+    
+    // Left wall - 3 sections
+    { x: -4.01, y: 2.5, z: 2, w: 3, h: 4, rotY: Math.PI / 2 },
+    { x: -4.01, y: 2.5, z: -2, w: 3, h: 4, rotY: Math.PI / 2 },
+    
+    // Right wall - 3 sections  
+    { x: 4.01, y: 2.5, z: 2, w: 3, h: 4, rotY: -Math.PI / 2 },
+    { x: 4.01, y: 2.5, z: -2, w: 3, h: 4, rotY: -Math.PI / 2 },
+    
+    // Back wall - 2 sections
+    { x: -2, y: 2.5, z: -4.01, w: 3, h: 4, rotY: Math.PI },
+    { x: 2, y: 2.5, z: -4.01, w: 3, h: 4, rotY: Math.PI },
   ];
   
   wallPositions.forEach((pos, index) => {
     const section = new THREE.Mesh(
       new THREE.PlaneGeometry(pos.w, pos.h),
-      sectionMat.clone()
+      unpaintedMat.clone()
     );
     section.position.set(pos.x, pos.y, pos.z);
     if (pos.rotY) section.rotation.y = pos.rotY;
