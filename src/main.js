@@ -2295,8 +2295,8 @@ function shoutNeighbor(text) {
     window.speechSynthesis.cancel();
     const utter = new SpeechSynthesisUtterance(text);
     utter.lang = 'da-DK';
-    utter.pitch = 0.35;
-    utter.rate = 1.08;
+    utter.pitch = 0.22;
+    utter.rate = 0.92;
     utter.volume = 1;
     const voices = window.speechSynthesis.getVoices();
     const danish = voices.find((v) => v.lang && v.lang.toLowerCase().startsWith('da'));
