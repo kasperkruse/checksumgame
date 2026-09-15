@@ -1975,6 +1975,11 @@ function setupControls() {
     if (e.code === 'Space') keys.space = true;
     if (e.code === 'KeyR' && neighborState === 'won') restartGame();
     
+    // Debug shortcut: Press 2 to skip to Level 2 (paint house)
+    if (e.code === 'Digit2' && currentLevel === 1) {
+      startLevel2();
+    }
+    
     if (e.code === 'Space' && showingDialog) {
       hideDialog();
       if (neighborState === 'approaching') neighborState = 'fighting';
