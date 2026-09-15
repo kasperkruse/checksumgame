@@ -1,14 +1,22 @@
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 
 const WORLD_SIZE = 30;
 const GRASS_DENSITY = 8;
-const PLAYER_SPEED = 0.1;
+const PLAYER_SPEED = 0.07;
 const MOUSE_SENSITIVITY = 0.002;
 const MOW_RADIUS = 1.0;
 const MOW_REWARD = 100;
 
 let scene, camera, renderer;
 let mower;
+let mowerTemplate = null;
+let house = null;
+let playerModel = null;
+let playerMixer = null;
+let playerActions = { idle: null, walk: null };
+let playerFootOffset = 0;
+let houseBounds = { minX: -5, maxX: 5, minZ: -4, maxZ: 4 };
 let grassBlades = [];
 let totalGrass = 0;
 let money = 0;
@@ -17,7 +25,7 @@ let clock = new THREE.Clock();
 
 let playerPos = new THREE.Vector3(-6, 1.5, 10);
 let playerYaw = 0;
-let playerPitch = 0;
+let playerPitch = -0.18;
 let isPointerLocked = false;
 
 let neighbor = null;
@@ -119,7 +127,7 @@ const COLORS = {
   neighborPants: 0x2D4A6D,
 };
 
-function init() {
+async function init() {
   scene = new THREE.Scene();
   
   // Bright blue sky gradient
@@ -159,6 +167,7 @@ function init() {
 
   camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.1, 200);
   camera.position.copy(playerPos);
+  scene.add(camera);
 
   renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setSize(window.innerWidth, window.innerHeight);
@@ -206,8 +215,10 @@ function init() {
 
   createGround();
   createStreet();
+  await loadGltfModels();
   createHouse();
   createNeighborHouse();
+  createPlayerCharacter();
   createDeck();
   createPath();
   createGrass();
@@ -251,6 +262,43 @@ function init() {
   });
 
   animate();
+}
+
+function enableShadows(root) {
+  root.traverse((obj) => {
+    if (obj.isMesh) {
+      obj.castShadow = true;
+      obj.receiveShadow = true;
+    }
+  });
+}
+
+function loadGltf(url) {
+  const loader = new GLTFLoader();
+  return loader.loadAsync(url);
+}
+
+async function loadGltfModels() {
+  const [houseGltf, neighborGltf, playerGltf, mowerGltf] = await Promise.all([
+    loadGltf('/models/house.glb'),
+    loadGltf('/models/neighbor-house.glb'),
+    loadGltf('/models/player.glb'),
+    loadGltf('/models/mower.glb'),
+  ]);
+
+  window._houseGltf = houseGltf;
+  window._neighborGltf = neighborGltf;
+  window._playerGltf = playerGltf;
+  mowerTemplate = mowerGltf.scene;
+  enableShadows(mowerTemplate);
+}
+
+function groundModel(model) {
+  model.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(model);
+  model.position.y -= box.min.y;
+  model.updateMatrixWorld(true);
+  return new THREE.Box3().setFromObject(model);
 }
 
 function createClouds() {
@@ -336,150 +384,59 @@ function createStreet() {
 }
 
 function createHouse() {
-  const house = new THREE.Group();
-
-  // Foundation
-  const baseGeo = new THREE.BoxGeometry(HOUSE_WIDTH, 0.3, HOUSE_DEPTH);
-  const baseMat = new THREE.MeshLambertMaterial({ color: 0x808080 });
-  const base = new THREE.Mesh(baseGeo, baseMat);
-  base.position.y = 0.15;
-  base.castShadow = true;
-  house.add(base);
-
-  // Blue siding walls
-  const wallGeo = new THREE.BoxGeometry(HOUSE_WIDTH, HOUSE_HEIGHT, HOUSE_DEPTH);
-  const wallMat = new THREE.MeshLambertMaterial({ color: COLORS.houseWall });
-  const walls = new THREE.Mesh(wallGeo, wallMat);
-  walls.position.y = HOUSE_WALL_Y;
-  walls.castShadow = true;
-  walls.receiveShadow = true;
-  house.add(walls);
-
-  // White trim on corners
-  const trimMat = new THREE.MeshLambertMaterial({ color: COLORS.houseTrim });
-  const cornerTrimGeo = new THREE.BoxGeometry(0.2, 4, 0.2);
-  [[-3.9, 2.3, 2.9], [3.9, 2.3, 2.9], [-3.9, 2.3, -2.9], [3.9, 2.3, -2.9]].forEach(([x, y, z]) => {
-    const trim = new THREE.Mesh(cornerTrimGeo, trimMat);
-    trim.position.set(x, y, z);
-    house.add(trim);
-  });
-
-  // Gray roof
-  const roofGeo = new THREE.ConeGeometry(6.5, 3, 4);
-  const roofMat = new THREE.MeshLambertMaterial({ color: COLORS.houseRoof });
-  const roof = new THREE.Mesh(roofGeo, roofMat);
-  roof.position.y = 5.8;
-  roof.rotation.y = Math.PI / 4;
-  roof.castShadow = true;
-  house.add(roof);
-
-  // Roof edge trim
-  const roofEdge = new THREE.Mesh(new THREE.BoxGeometry(8.5, 0.15, 6.5), trimMat);
-  roofEdge.position.y = 4.35;
-  house.add(roofEdge);
-
-  // Chimney
-  const chimneyGeo = new THREE.BoxGeometry(0.8, 2, 0.8);
-  const chimneyMat = new THREE.MeshLambertMaterial({ color: 0x8b4513 });
-  const chimney = new THREE.Mesh(chimneyGeo, chimneyMat);
-  chimney.position.set(2.5, 6.5, 0);
-  chimney.castShadow = true;
-  house.add(chimney);
-
-  // Brown door
-  const doorGeo = new THREE.BoxGeometry(1.2, 2.4, 0.15);
-  const doorMat = new THREE.MeshLambertMaterial({ color: COLORS.houseDoor });
-  const door = new THREE.Mesh(doorGeo, doorMat);
-  door.position.set(0, 1.5, 3.05);
-  house.add(door);
-
-  // Door frame (white)
-  const doorFrame = new THREE.Mesh(new THREE.BoxGeometry(1.4, 2.6, 0.1), trimMat);
-  doorFrame.position.set(0, 1.5, 3.02);
-  house.add(doorFrame);
-
-  // Door handle
-  const handleGeo = new THREE.SphereGeometry(0.06);
-  const handleMat = new THREE.MeshLambertMaterial({ color: 0xD4AF37 });
-  const handle = new THREE.Mesh(handleGeo, handleMat);
-  handle.position.set(0.4, 1.4, 3.15);
-  house.add(handle);
-
-  // Windows with blue glass and white frames
-  const windowMat = new THREE.MeshBasicMaterial({ color: COLORS.houseWindow });
-  const frameMat = new THREE.MeshLambertMaterial({ color: COLORS.windowFrame });
-  
-  const windowPositions = [[-2.5, 2.5, 3.01], [2.5, 2.5, 3.01], [-2.5, 2.5, -3.01], [2.5, 2.5, -3.01]];
-  
-  windowPositions.forEach(([x, y, z]) => {
-    const win = new THREE.Mesh(new THREE.BoxGeometry(1.2, 1.4, 0.1), windowMat);
-    win.position.set(x, y, z);
-    house.add(win);
-
-    const frame = new THREE.Mesh(new THREE.BoxGeometry(1.4, 1.6, 0.08), frameMat);
-    frame.position.set(x, y, z > 0 ? z - 0.02 : z + 0.02);
-    house.add(frame);
-
-    const dividerH = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.06, 0.12), frameMat);
-    dividerH.position.set(x, y, z > 0 ? z + 0.02 : z - 0.02);
-    house.add(dividerH);
-    
-    const dividerV = new THREE.Mesh(new THREE.BoxGeometry(0.06, 1.4, 0.12), frameMat);
-    dividerV.position.set(x, y, z > 0 ? z + 0.02 : z - 0.02);
-    house.add(dividerV);
-  });
-
-  // Front steps
-  const stepsGeo = new THREE.BoxGeometry(1.8, 0.15, 0.5);
-  const stepsMat = new THREE.MeshLambertMaterial({ color: 0x808080 });
-  for (let i = 0; i < 3; i++) {
-    const step = new THREE.Mesh(stepsGeo, stepsMat);
-    step.position.set(0, 0.08 + i * 0.15, 3.5 + i * 0.5);
-    step.castShadow = true;
-    house.add(step);
-  }
-
+  house = window._houseGltf.scene.clone(true);
+  house.scale.setScalar(4.8);
   house.position.set(0, 0, 0);
+  enableShadows(house);
   scene.add(house);
+  const grounded = groundModel(house);
+  houseBounds = {
+    minX: grounded.min.x,
+    maxX: grounded.max.x,
+    minZ: grounded.min.z,
+    maxZ: grounded.max.z,
+    minY: grounded.min.y,
+    maxY: grounded.max.y,
+  };
 }
 
 function createNeighborHouse() {
-  const house = new THREE.Group();
-
-  // Green walls
-  const wallGeo = new THREE.BoxGeometry(7, 4, 5);
-  const wallMat = new THREE.MeshLambertMaterial({ color: 0x6B8E6B });
-  const walls = new THREE.Mesh(wallGeo, wallMat);
-  walls.position.y = 2;
-  walls.castShadow = true;
-  house.add(walls);
-
-  // Dark roof
-  const roofGeo = new THREE.ConeGeometry(5.5, 2.5, 4);
-  const roofMat = new THREE.MeshLambertMaterial({ color: 0x3D5A5A });
-  const roof = new THREE.Mesh(roofGeo, roofMat);
-  roof.position.y = 5;
-  roof.rotation.y = Math.PI / 4;
-  roof.castShadow = true;
-  house.add(roof);
-
-  // Dark red door
-  const doorMat = new THREE.MeshLambertMaterial({ color: 0x6B0000 });
-  const door = new THREE.Mesh(new THREE.BoxGeometry(1, 2.2, 0.1), doorMat);
-  door.position.set(0, 1.1, 2.51);
-  house.add(door);
-
-  // Windows
-  const windowMat = new THREE.MeshBasicMaterial({ color: 0x87CEEB });
-  [[-2, 2.2], [2, 2.2]].forEach(([x, y]) => {
-    const win = new THREE.Mesh(new THREE.BoxGeometry(1, 1.2, 0.1), windowMat);
-    win.position.set(x, y, 2.51);
-    house.add(win);
-  });
-
-  house.position.set(-28, 0, -2);
-  scene.add(house);
+  const neighborHouse = window._neighborGltf.scene.clone(true);
+  neighborHouse.scale.setScalar(4.2);
+  neighborHouse.position.set(-26, 0, -2);
+  enableShadows(neighborHouse);
+  scene.add(neighborHouse);
+  groundModel(neighborHouse);
 }
+
+function createPlayerCharacter() {
+  const gltf = window._playerGltf;
+  playerModel = gltf.scene;
+  playerModel.scale.setScalar(0.95);
+  enableShadows(playerModel);
+  playerModel.traverse((obj) => {
+    if (obj.name === 'head' || obj.name === 'head-mesh') {
+      obj.visible = false;
+    }
+  });
+  scene.add(playerModel);
+  playerModel.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(playerModel);
+  playerFootOffset = -box.min.y;
+  playerModel.position.set(playerPos.x, playerFootOffset, playerPos.z);
+
+  playerMixer = new THREE.AnimationMixer(playerModel);
+  const idleClip = THREE.AnimationClip.findByName(gltf.animations, 'idle');
+  const walkClip = THREE.AnimationClip.findByName(gltf.animations, 'walk');
+  if (idleClip) {
+    playerActions.idle = playerMixer.clipAction(idleClip);
+    playerActions.idle.play();
+  }
+  if (walkClip) {
+    playerActions.walk = playerMixer.clipAction(walkClip);
+  }
+}
+
 
 function createDeck() {
   const deck = new THREE.Group();
@@ -562,7 +519,7 @@ function createDeck() {
   grill.position.set(1.8, 0.2, 1);
   deck.add(grill);
 
-  deck.position.set(6, 0, 2);
+  deck.position.set(houseBounds.maxX + 2.8, 0, 2);
   scene.add(deck);
 }
 
@@ -593,11 +550,12 @@ function createPath() {
   const stoneMat = new THREE.MeshLambertMaterial({ color: COLORS.pathStone });
   
   // Main path from house to front fence
-  const pathLen = FENCE_SIZE - 4;
+  const pathStart = houseBounds.maxZ;
+  const pathLen = Math.max(2, FENCE_SIZE - pathStart - 0.4);
   const pathGeo = new THREE.PlaneGeometry(2.5, pathLen);
   const path = new THREE.Mesh(pathGeo, pathMat);
   path.rotation.x = -Math.PI / 2;
-  path.position.set(0, 0.02, 4 + pathLen/2);
+  path.position.set(0, 0.02, pathStart + pathLen / 2);
   path.receiveShadow = true;
   scene.add(path);
 
@@ -608,7 +566,7 @@ function createPath() {
     stone.position.set(
       (Math.random() - 0.5) * 2,
       0.03,
-      4 + Math.random() * pathLen
+      pathStart + Math.random() * pathLen
     );
     stone.rotation.y = Math.random() * 0.3;
     stone.receiveShadow = true;
@@ -619,7 +577,7 @@ function createPath() {
   const sidePathGeo = new THREE.PlaneGeometry(4, 2);
   const sidePath = new THREE.Mesh(sidePathGeo, pathMat);
   sidePath.rotation.x = -Math.PI / 2;
-  sidePath.position.set(4.5, 0.02, 1.5);
+  sidePath.position.set(houseBounds.maxX + 1.5, 0.02, 1.5);
   sidePath.receiveShadow = true;
   scene.add(sidePath);
 }
@@ -1064,7 +1022,7 @@ function createWife() {
   wife.userData.rightLeg = rightLeg;
   
   // Start inside house (hidden)
-  wife.position.set(0, 0, 1); // Near door
+  wife.position.set(0, 0, houseBounds.maxZ);
   wife.visible = false;
   
   scene.add(wife);
@@ -1306,118 +1264,57 @@ function createFirstPersonArms() {
 
 function createFirstPersonMower() {
   fpMowerHandle = new THREE.Group();
-  
-  const handleMat = new THREE.MeshLambertMaterial({ color: 0x333333 });
-  const gripMat = new THREE.MeshLambertMaterial({ color: 0x111111 });
+
+  const viewMower = mowerTemplate.clone(true);
+  enableShadows(viewMower);
+  viewMower.scale.setScalar(0.85);
+  // Handles toward the camera, deck further forward and down in view
+  viewMower.rotation.set(0.28, Math.PI, 0);
+  viewMower.position.set(0, -0.55, -0.92);
+  fpMowerHandle.add(viewMower);
+
   const skinMat = new THREE.MeshLambertMaterial({ color: 0xDEB887 });
-  const shirtMat = new THREE.MeshLambertMaterial({ color: 0xB22222 });
-  const shirtDarkMat = new THREE.MeshLambertMaterial({ color: 0x8B0000 });
-  const mowerRedMat = new THREE.MeshLambertMaterial({ color: COLORS.mower });
-  const mowerBlackMat = new THREE.MeshLambertMaterial({ color: 0x1a1a1a });
-  
-  // Mower body visible at bottom of screen - MORE VISIBLE
-  const mowerBody = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.25, 0.5), mowerRedMat);
-  mowerBody.position.set(0, -0.45, -0.55);
-  fpMowerHandle.add(mowerBody);
-  
-  // Mower top detail
-  const mowerTop = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.12, 0.35), mowerRedMat);
-  mowerTop.position.set(0, -0.32, -0.55);
-  fpMowerHandle.add(mowerTop);
-  
-  // Engine on top
-  const engine = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.1, 8), mowerBlackMat);
-  engine.position.set(0, -0.24, -0.6);
-  fpMowerHandle.add(engine);
-  
-  // Mower deck
-  const mowerDeck = new THREE.Mesh(new THREE.BoxGeometry(0.65, 0.08, 0.55), mowerBlackMat);
-  mowerDeck.position.set(0, -0.54, -0.55);
-  fpMowerHandle.add(mowerDeck);
-  
-  // Wheels visible
-  const wheelMat = new THREE.MeshLambertMaterial({ color: 0x222222 });
-  [[-0.28, -0.28], [0.28, -0.28]].forEach(([x, z]) => {
-    const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.04, 12), wheelMat);
-    wheel.rotation.z = Math.PI / 2;
-    wheel.position.set(x, -0.52, z - 0.55);
-    fpMowerHandle.add(wheel);
-  });
-  
-  // Left handle bar - more visible
-  const leftHandle = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, 0.6, 8), handleMat);
-  leftHandle.rotation.x = 0.45;
-  leftHandle.position.set(-0.22, -0.28, -0.38);
-  fpMowerHandle.add(leftHandle);
-  
-  // Right handle bar  
-  const rightHandle = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, 0.6, 8), handleMat);
-  rightHandle.rotation.x = 0.45;
-  rightHandle.position.set(0.22, -0.28, -0.38);
-  fpMowerHandle.add(rightHandle);
-  
-  // Cross grip bar
-  const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.52, 8), gripMat);
-  grip.rotation.z = Math.PI / 2;
-  grip.position.set(0, -0.08, -0.15);
-  fpMowerHandle.add(grip);
-  
-  // Left arm and hand on grip - bigger and more visible
+  const shirtMat = new THREE.MeshLambertMaterial({ color: 0xE07A3D });
+  const shirtDarkMat = new THREE.MeshLambertMaterial({ color: 0xC45C22 });
+
   const leftArm = new THREE.Group();
-  // Forearm
-  const leftForearm = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.055, 0.25, 8), skinMat);
+  const leftForearm = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.055, 0.28, 8), skinMat);
   leftForearm.rotation.z = Math.PI / 2 + 0.35;
-  leftForearm.rotation.x = 0.15;
-  leftForearm.position.set(-0.1, 0.04, 0);
+  leftForearm.rotation.x = 0.2;
+  leftForearm.position.set(-0.1, 0.02, 0);
   leftArm.add(leftForearm);
-  // Sleeve
   const leftSleeve = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.075, 0.2, 8), shirtMat);
   leftSleeve.rotation.z = Math.PI / 2 + 0.45;
-  leftSleeve.position.set(-0.22, 0.1, 0.02);
+  leftSleeve.position.set(-0.22, 0.08, 0.02);
   leftArm.add(leftSleeve);
-  // Plaid stripe
-  const leftStripe = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.018, 0.08), shirtDarkMat);
-  leftStripe.position.set(-0.22, 0.1, 0.07);
-  leftStripe.rotation.z = 0.45;
-  leftArm.add(leftStripe);
-  // Hand
   const leftHand = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 6), skinMat);
   leftHand.scale.set(1.2, 0.7, 0.9);
-  leftHand.position.set(0.02, -0.02, 0);
+  leftHand.position.set(0.04, -0.04, -0.02);
   leftArm.add(leftHand);
-  leftArm.position.set(-0.18, -0.06, -0.15);
+  leftArm.position.set(-0.2, -0.12, -0.32);
   fpMowerHandle.add(leftArm);
-  
-  // Right arm and hand on grip
+
   const rightArm = new THREE.Group();
-  // Forearm
-  const rightForearm = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.055, 0.25, 8), skinMat);
+  const rightForearm = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.055, 0.28, 8), skinMat);
   rightForearm.rotation.z = -Math.PI / 2 - 0.35;
-  rightForearm.rotation.x = 0.15;
-  rightForearm.position.set(0.1, 0.04, 0);
+  rightForearm.rotation.x = 0.2;
+  rightForearm.position.set(0.1, 0.02, 0);
   rightArm.add(rightForearm);
-  // Sleeve
   const rightSleeve = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.075, 0.2, 8), shirtMat);
   rightSleeve.rotation.z = -Math.PI / 2 - 0.45;
-  rightSleeve.position.set(0.22, 0.1, 0.02);
+  rightSleeve.position.set(0.22, 0.08, 0.02);
   rightArm.add(rightSleeve);
-  // Plaid stripe
-  const rightStripe = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.018, 0.08), shirtDarkMat);
-  rightStripe.position.set(0.22, 0.1, 0.07);
-  rightStripe.rotation.z = -0.45;
-  rightArm.add(rightStripe);
-  // Hand
   const rightHand = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 6), skinMat);
   rightHand.scale.set(1.2, 0.7, 0.9);
-  rightHand.position.set(-0.02, -0.02, 0);
+  rightHand.position.set(-0.04, -0.04, -0.02);
   rightArm.add(rightHand);
-  rightArm.position.set(0.18, -0.06, -0.15);
+  rightArm.position.set(0.2, -0.12, -0.32);
   fpMowerHandle.add(rightArm);
-  
-  // Mower visible in first person is shown by default
+
   fpMowerHandle.visible = true;
   camera.add(fpMowerHandle);
 }
+  
 
 function createGrass() {
   grassBlades = [];
@@ -1531,88 +1428,34 @@ function darkenColor(hex, factor) {
 }
 
 function isInHouseArea(x, z) {
-  // House is now centered at z=0
-  return x > -5 && x < 5 && z > -4 && z < 4;
+  const pad = 0.7;
+  return (
+    x > houseBounds.minX - pad &&
+    x < houseBounds.maxX + pad &&
+    z > houseBounds.minZ - pad &&
+    z < houseBounds.maxZ + pad
+  );
 }
 
 function isOnPath(x, z) {
-  // Path from house front door to front fence
-  if (Math.abs(x) < 1.5 && z > 3.5 && z < FENCE_SIZE) return true;
-  // Side path to deck
-  if (x > 2.5 && x < 6.5 && z > 0 && z < 3) return true;
+  if (Math.abs(x) < 1.5 && z > houseBounds.maxZ - 0.2 && z < FENCE_SIZE) return true;
+  if (x > houseBounds.maxX - 0.5 && x < houseBounds.maxX + 4 && z > 0 && z < 3.5) return true;
   return false;
 }
 
 function isOnDeck(x, z) {
-  return x > 3 && x < 9.5 && z > -1 && z < 5;
+  return x > houseBounds.maxX + 0.2 && x < houseBounds.maxX + 6 && z > -1 && z < 5;
 }
 
 function createMower() {
-  mower = new THREE.Group();
-
-  const deckGeo = new THREE.BoxGeometry(0.6, 0.12, 0.8);
-  const deckMat = new THREE.MeshLambertMaterial({ color: COLORS.mowerBody });
-  const deck = new THREE.Mesh(deckGeo, deckMat);
-  deck.position.y = 0.08;
-  deck.castShadow = true;
-  mower.add(deck);
-
-  const bodyGeo = new THREE.BoxGeometry(0.5, 0.3, 0.6);
-  const bodyMat = new THREE.MeshLambertMaterial({ color: COLORS.mower });
-  const body = new THREE.Mesh(bodyGeo, bodyMat);
-  body.position.y = 0.28;
-  body.castShadow = true;
-  mower.add(body);
-
-  const engineGeo = new THREE.CylinderGeometry(0.1, 0.1, 0.15, 8);
-  const engineMat = new THREE.MeshLambertMaterial({ color: 0x111111 });
-  const engine = new THREE.Mesh(engineGeo, engineMat);
-  engine.position.set(0, 0.48, -0.1);
-  mower.add(engine);
-
-  const wheelGeo = new THREE.CylinderGeometry(0.1, 0.1, 0.05, 12);
-  const wheelMat = new THREE.MeshLambertMaterial({ color: 0x1a1a1a });
-  const hubMat = new THREE.MeshLambertMaterial({ color: 0x666666 });
-  [[-0.28, -0.35], [0.28, -0.35], [-0.28, 0.35], [0.28, 0.35]].forEach(([x, z]) => {
-    const wheel = new THREE.Mesh(wheelGeo, wheelMat);
-    wheel.rotation.z = Math.PI / 2;
-    wheel.position.set(x, 0.1, z);
-    mower.add(wheel);
-    
-    const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.06, 8), hubMat);
-    hub.rotation.z = Math.PI / 2;
-    hub.position.set(x, 0.1, z);
-    mower.add(hub);
-  });
-
-  const handleMat = new THREE.MeshLambertMaterial({ color: 0x333333 });
-  
-  const leftHandle = new THREE.Group();
-  const leftPole = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.9, 8), handleMat);
-  leftPole.rotation.x = 0.5;
-  leftPole.position.y = 0.4;
-  leftHandle.add(leftPole);
-  leftHandle.position.set(-0.2, 0, -0.5);
-  mower.add(leftHandle);
-
-  const rightHandle = new THREE.Group();
-  const rightPole = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.9, 8), handleMat);
-  rightPole.rotation.x = 0.5;
-  rightPole.position.y = 0.4;
-  rightHandle.add(rightPole);
-  rightHandle.position.set(0.2, 0, -0.5);
-  mower.add(rightHandle);
-
-  const gripGeo = new THREE.CylinderGeometry(0.035, 0.035, 0.5, 8);
-  const gripMat = new THREE.MeshLambertMaterial({ color: 0x111111 });
-  const grip = new THREE.Mesh(gripGeo, gripMat);
-  grip.rotation.z = Math.PI / 2;
-  grip.position.set(0, 0.85, -0.9);
-  mower.add(grip);
-
-  mower.position.set(playerPos.x, 0, playerPos.z + 1.2);
+  mower = mowerTemplate.clone(true);
+  enableShadows(mower);
+  mower.scale.setScalar(1);
+  mower.position.set(playerPos.x, 0, playerPos.z - 1.6);
+  mower.visible = false;
   scene.add(mower);
 }
+
 
 function createNeighbor() {
   neighbor = new THREE.Group();
@@ -2108,7 +1951,7 @@ function restartGame() {
   // Reset player
   playerPos.set(-6, 1.5, 10);
   playerYaw = 0;
-  playerPitch = 0;
+  playerPitch = -0.18;
   playerHealth = 100;
   completed = false;
   
@@ -2139,8 +1982,8 @@ function restartGame() {
   wifeNextAppearance = 10 + Math.random() * 20;
   if (wife) wife.visible = false;
   
-  // Show mower, hide paintbrush
-  if (mower) mower.visible = true;
+  // Show first-person mower, keep world mower as a hidden mow-point
+  if (mower) mower.visible = false;
   if (fpMowerHandle) fpMowerHandle.visible = true;
   
   // Remove paintbrush if exists
@@ -2334,6 +2177,7 @@ function updateNeighbor() {
 function update() {
   if (completed || neighborState === 'won') return;
 
+  const dt = clock.getDelta();
   const moveDir = new THREE.Vector3();
   
   if (keys.w) moveDir.z -= 1;
@@ -2369,15 +2213,31 @@ function update() {
   camera.rotation.y = playerYaw;
   camera.rotation.x = playerPitch;
 
-  // Mower in front of player
-  const mowerOffset = new THREE.Vector3(0, -0.6, 1.5);
+  // World mower stays in front of the player (camera looks down -Z)
+  const mowerOffset = new THREE.Vector3(0, 0, -1.7);
   mowerOffset.applyAxisAngle(new THREE.Vector3(0, 1, 0), playerYaw);
   mower.position.set(
     playerPos.x + mowerOffset.x,
     0,
     playerPos.z + mowerOffset.z
   );
-  mower.rotation.y = playerYaw;
+  mower.rotation.y = playerYaw + Math.PI;
+
+  if (playerModel) {
+    playerModel.position.set(playerPos.x, playerFootOffset, playerPos.z);
+    playerModel.rotation.y = playerYaw;
+  }
+  if (playerMixer) playerMixer.update(dt);
+  if (playerActions.walk && playerActions.idle) {
+    const shouldWalk = isMoving && currentLevel === 1;
+    if (shouldWalk && !playerActions.walk.isRunning()) {
+      playerActions.idle.fadeOut(0.15);
+      playerActions.walk.reset().fadeIn(0.15).play();
+    } else if (!shouldWalk && !playerActions.idle.isRunning()) {
+      playerActions.walk.fadeOut(0.15);
+      playerActions.idle.reset().fadeIn(0.15).play();
+    }
+  }
 
   // Grass sway animation is now handled by wind via shader (instanced mesh optimization)
 
@@ -2536,7 +2396,7 @@ function updateWife() {
     if (wifeTimer >= wifeNextAppearance) {
       wifeState = 'coming_out';
       wife.visible = true;
-      wife.position.set(0, 0, 3.5); // At door
+      wife.position.set(0, 0, houseBounds.maxZ + 0.2);
       wife.rotation.y = 0;
       wifeTimer = 0;
     }
@@ -2551,7 +2411,7 @@ function updateWife() {
     wife.userData.leftLeg.rotation.x = walkCycle;
     wife.userData.rightLeg.rotation.x = -walkCycle;
     
-    if (wife.position.z >= 5.5) {
+    if (wife.position.z >= houseBounds.maxZ + 2.2) {
       wifeState = 'whistling';
       wifeTimer = 0;
       // Whistle!
@@ -2583,7 +2443,7 @@ function updateWife() {
     wife.userData.leftLeg.rotation.x = walkCycle;
     wife.userData.rightLeg.rotation.x = -walkCycle;
     
-    if (wife.position.z <= 3.5) {
+    if (wife.position.z <= houseBounds.maxZ + 0.2) {
       wifeState = 'inside';
       wife.visible = false;
       wifeTimer = 0;
@@ -2652,27 +2512,23 @@ function createPaintSections() {
     side: THREE.FrontSide
   });
 
-  // Match createHouse() wall box exactly so tiles sit on the siding, not in the air
-  const halfW = HOUSE_WIDTH / 2;
-  const halfD = HOUSE_DEPTH / 2;
-  const wallBottom = HOUSE_WALL_Y - HOUSE_HEIGHT / 2;
-  const wallTop = HOUSE_WALL_Y + HOUSE_HEIGHT / 2;
-  const tile = 1;
-  const eps = 0.03;
+  const tile = 0.9;
+  const eps = 0.05;
+  const wallBottom = Math.max(0.35, (houseBounds.minY || 0) + 0.2);
+  const wallTop = Math.min(houseBounds.maxY || 5, 5.2);
+  const minX = houseBounds.minX;
+  const maxX = houseBounds.maxX;
+  const minZ = houseBounds.minZ;
+  const maxZ = houseBounds.maxZ;
+  const midX = (minX + maxX) / 2;
+  const midZ = (minZ + maxZ) / 2;
 
   function overlapsDoor(x, y, face) {
-    return face === 'front' && Math.abs(x) < 0.7 && y < 2.75;
-  }
-
-  function overlapsWindow(x, y, face) {
-    if (face !== 'front' && face !== 'back') return false;
-    const onWindowX = Math.abs(Math.abs(x) - 2.5) < 0.65;
-    const onWindowY = Math.abs(y - 2.5) < 0.75;
-    return onWindowX && onWindowY;
+    return face === 'front' && Math.abs(x - midX) < 0.7 && y < wallBottom + 2.2;
   }
 
   function addTile(x, y, z, rotY, face) {
-    if (overlapsDoor(x, y, face) || overlapsWindow(x, y, face)) return;
+    if (overlapsDoor(x, y, face)) return;
     const section = new THREE.Mesh(
       new THREE.PlaneGeometry(tile, tile),
       unpaintedMat.clone()
@@ -2685,17 +2541,17 @@ function createPaintSections() {
     scene.add(section);
   }
 
-  for (let x = -halfW + tile / 2; x < halfW - 0.01; x += tile) {
-    for (let y = wallBottom + tile / 2; y < wallTop - 0.01; y += tile) {
-      addTile(x, y, halfD + eps, 0, 'front');
-      addTile(x, y, -(halfD + eps), Math.PI, 'back');
+  for (let x = minX + tile / 2; x < maxX - 0.05; x += tile) {
+    for (let y = wallBottom + tile / 2; y < wallTop - 0.05; y += tile) {
+      addTile(x, y, maxZ + eps, 0, 'front');
+      addTile(x, y, minZ - eps, Math.PI, 'back');
     }
   }
 
-  for (let z = -halfD + tile / 2; z < halfD - 0.01; z += tile) {
-    for (let y = wallBottom + tile / 2; y < wallTop - 0.01; y += tile) {
-      addTile(-(halfW + eps), y, z, -Math.PI / 2, 'left');
-      addTile(halfW + eps, y, z, Math.PI / 2, 'right');
+  for (let z = minZ + tile / 2; z < maxZ - 0.05; z += tile) {
+    for (let y = wallBottom + tile / 2; y < wallTop - 0.05; y += tile) {
+      addTile(minX - eps, y, z, -Math.PI / 2, 'left');
+      addTile(maxX + eps, y, z, Math.PI / 2, 'right');
     }
   }
 
