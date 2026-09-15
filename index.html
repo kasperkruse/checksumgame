@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="da">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Græsslåning - Havemand</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="game-container">
+      <canvas id="game-canvas"></canvas>
+      <div id="hud">
+        <div class="hud-item" id="money-display">💰 Penge: <span id="money">0</span> kr</div>
+        <div class="hud-item" id="grass-display">🌿 Græs slået: <span id="grass-percent">0</span>%</div>
+        <div class="hud-item" id="controls-hint">⌨️ WASD / Piletaster for at bevæge dig</div>
+      </div>
+      <div id="completion-modal" class="hidden">
+        <div class="modal-content">
+          <h2>🎉 Græsset er slået!</h2>
+          <p>Du har tjent <span id="reward-amount">100</span> kr</p>
+          <div class="next-jobs">
+            <h3>Næste opgaver:</h3>
+            <ul>
+              <li>🎨 Male hegnet (kommer snart)</li>
+              <li>🌳 Beskære hækken (kommer snart)</li>
+              <li>🚗 Vaske bilen (kommer snart)</li>
+            </ul>
+          </div>
+          <button id="restart-btn">🔄 Ny dag</button>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
