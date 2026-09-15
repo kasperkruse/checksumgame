@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 
 const WORLD_SIZE = 30;
-const GRASS_DENSITY = 10;
+const GRASS_DENSITY = 8;
 const PLAYER_SPEED = 0.1;
 const MOUSE_SENSITIVITY = 0.002;
 const MOW_RADIUS = 1.0;
@@ -1417,53 +1417,102 @@ function createGrass() {
 
   const fenceInner = FENCE_SIZE - 0.5;
   
+  // First pass: count how many grass positions we need
+  const grassPositions = [];
   for (let x = -fenceInner; x < fenceInner; x += 1 / GRASS_DENSITY) {
     for (let z = -fenceInner; z < fenceInner; z += 1 / GRASS_DENSITY) {
       if (isInHouseArea(x, z) || isOnPath(x, z) || isOnDeck(x, z)) continue;
-
+      
       const stripeIndex = Math.floor((x + fenceInner) * 2);
       const isLightStripe = stripeIndex % 2 === 0;
       
-      // Create a cluster of grass blades for more natural look
-      const clusterGroup = new THREE.Group();
-      const numBlades = 3 + Math.floor(Math.random() * 3); // 3-5 blades per cluster
-      
-      for (let b = 0; b < numBlades; b++) {
-        // Vary the grass color slightly for natural look
-        const colorVariation = 0.9 + Math.random() * 0.2;
-        const baseColor = isLightStripe ? COLORS.grassTall : darkenColor(COLORS.grassTall, 0.92);
-        const variedColor = darkenColor(baseColor, colorVariation);
-        
-        const bladeHeight = 0.25 + Math.random() * 0.2;
-        const bladeGeo = new THREE.ConeGeometry(0.015 + Math.random() * 0.01, bladeHeight, 3);
-        const bladeMat = new THREE.MeshLambertMaterial({ color: variedColor });
-
-        const blade = new THREE.Mesh(bladeGeo, bladeMat);
-        blade.position.set(
-          (Math.random() - 0.5) * 0.08,
-          bladeHeight / 2,
-          (Math.random() - 0.5) * 0.08
-        );
-        blade.rotation.x = (Math.random() - 0.5) * 0.4;
-        blade.rotation.z = (Math.random() - 0.5) * 0.4;
-        clusterGroup.add(blade);
-      }
-      
-      clusterGroup.position.set(
-        x + (Math.random() - 0.5) * 0.05,
-        0,
-        z + (Math.random() - 0.5) * 0.05
-      );
-      clusterGroup.userData.isTall = true;
-      clusterGroup.userData.stripeLight = isLightStripe;
-      clusterGroup.userData.swayOffset = Math.random() * Math.PI * 2;
-      clusterGroup.castShadow = true;
-
-      grassBlades.push(clusterGroup);
-      scene.add(clusterGroup);
-      totalGrass++;
+      grassPositions.push({
+        x: x + (Math.random() - 0.5) * 0.05,
+        z: z + (Math.random() - 0.5) * 0.05,
+        isLightStripe
+      });
     }
   }
+  
+  // Create instanced meshes for grass (much faster!)
+  const bladeGeo = new THREE.ConeGeometry(0.02, 0.3, 3);
+  const lightGrassMat = new THREE.MeshLambertMaterial({ color: COLORS.grassTall });
+  const darkGrassMat = new THREE.MeshLambertMaterial({ color: darkenColor(COLORS.grassTall, 0.92) });
+  
+  // Separate light and dark grass for stripe effect
+  const lightPositions = grassPositions.filter(p => p.isLightStripe);
+  const darkPositions = grassPositions.filter(p => !p.isLightStripe);
+  
+  // Create instanced mesh for light grass
+  const lightGrassInstanced = new THREE.InstancedMesh(bladeGeo, lightGrassMat, lightPositions.length * 2);
+  lightGrassInstanced.castShadow = true;
+  
+  const darkGrassInstanced = new THREE.InstancedMesh(bladeGeo, darkGrassMat, darkPositions.length * 2);
+  darkGrassInstanced.castShadow = true;
+  
+  const dummy = new THREE.Object3D();
+  
+  // Set up light grass instances (2 blades per position for density)
+  lightPositions.forEach((pos, i) => {
+    for (let b = 0; b < 2; b++) {
+      dummy.position.set(
+        pos.x + (Math.random() - 0.5) * 0.06,
+        0.15,
+        pos.z + (Math.random() - 0.5) * 0.06
+      );
+      dummy.rotation.set(
+        (Math.random() - 0.5) * 0.3,
+        Math.random() * Math.PI,
+        (Math.random() - 0.5) * 0.3
+      );
+      dummy.scale.set(1, 0.8 + Math.random() * 0.4, 1);
+      dummy.updateMatrix();
+      lightGrassInstanced.setMatrixAt(i * 2 + b, dummy.matrix);
+    }
+  });
+  
+  // Set up dark grass instances
+  darkPositions.forEach((pos, i) => {
+    for (let b = 0; b < 2; b++) {
+      dummy.position.set(
+        pos.x + (Math.random() - 0.5) * 0.06,
+        0.15,
+        pos.z + (Math.random() - 0.5) * 0.06
+      );
+      dummy.rotation.set(
+        (Math.random() - 0.5) * 0.3,
+        Math.random() * Math.PI,
+        (Math.random() - 0.5) * 0.3
+      );
+      dummy.scale.set(1, 0.8 + Math.random() * 0.4, 1);
+      dummy.updateMatrix();
+      darkGrassInstanced.setMatrixAt(i * 2 + b, dummy.matrix);
+    }
+  });
+  
+  lightGrassInstanced.instanceMatrix.needsUpdate = true;
+  darkGrassInstanced.instanceMatrix.needsUpdate = true;
+  
+  scene.add(lightGrassInstanced);
+  scene.add(darkGrassInstanced);
+  
+  // Store grass data for mowing (simplified tracking)
+  grassPositions.forEach(pos => {
+    grassBlades.push({
+      x: pos.x,
+      z: pos.z,
+      isTall: true,
+      stripeLight: pos.isLightStripe,
+      swayOffset: Math.random() * Math.PI * 2
+    });
+    totalGrass++;
+  });
+  
+  // Store instanced meshes for later modification
+  window.grassInstancedLight = lightGrassInstanced;
+  window.grassInstancedDark = darkGrassInstanced;
+  window.grassLightPositions = lightPositions;
+  window.grassDarkPositions = darkPositions;
 }
 
 function darkenColor(hex, factor) {
@@ -2031,8 +2080,9 @@ function restartGame() {
   // Reset to level 1
   currentLevel = 1;
   
-  // Reset grass
-  grassBlades.forEach(blade => scene.remove(blade));
+  // Reset grass (remove instanced meshes)
+  if (window.grassInstancedLight) scene.remove(window.grassInstancedLight);
+  if (window.grassInstancedDark) scene.remove(window.grassInstancedDark);
   createGrass();
   
   // Reset paint sections
@@ -2311,14 +2361,7 @@ function update() {
   );
   mower.rotation.y = playerYaw;
 
-  // Grass sway animation
-  const time = clock.getElapsedTime();
-  grassBlades.forEach(blade => {
-    if (blade.userData.isTall) {
-      const sway = Math.sin(time * 1.5 + blade.userData.swayOffset) * 0.08;
-      blade.rotation.x = sway;
-    }
-  });
+  // Grass sway animation is now handled by wind via shader (instanced mesh optimization)
 
   updateNeighbor();
   updateDog();
@@ -2532,25 +2575,58 @@ function updateWife() {
 }
 
 function checkMowing() {
-  grassBlades.forEach(cluster => {
-    if (!cluster.userData.isTall) return;
+  const dummy = new THREE.Object3D();
+  let lightUpdated = false;
+  let darkUpdated = false;
+  
+  grassBlades.forEach((grass, index) => {
+    if (!grass.isTall) return;
 
     const dist = Math.sqrt(
-      Math.pow(cluster.position.x - mower.position.x, 2) +
-      Math.pow(cluster.position.z - mower.position.z, 2)
+      Math.pow(grass.x - mower.position.x, 2) +
+      Math.pow(grass.z - mower.position.z, 2)
     );
 
     if (dist < MOW_RADIUS) {
-      cluster.userData.isTall = false;
-      // Cut the grass - make all blades in cluster short
-      const stripeColor = cluster.userData.stripeLight ? COLORS.grassStripeLight : COLORS.grassStripeDark;
-      cluster.children.forEach(blade => {
-        blade.material.color.setHex(stripeColor);
-        blade.scale.set(1.2, 0.15, 1.2);
-        blade.position.y = 0.02;
-      });
+      grass.isTall = false;
+      
+      // Find which instanced mesh this grass belongs to and scale it down
+      if (grass.stripeLight) {
+        const lightIndex = window.grassLightPositions.findIndex(p => 
+          Math.abs(p.x - grass.x) < 0.1 && Math.abs(p.z - grass.z) < 0.1
+        );
+        if (lightIndex >= 0) {
+          // Scale down both blades at this position
+          for (let b = 0; b < 2; b++) {
+            dummy.position.set(grass.x, 0.02, grass.z);
+            dummy.rotation.set(0, 0, 0);
+            dummy.scale.set(1.5, 0.1, 1.5); // Flat cut grass
+            dummy.updateMatrix();
+            window.grassInstancedLight.setMatrixAt(lightIndex * 2 + b, dummy.matrix);
+          }
+          lightUpdated = true;
+        }
+      } else {
+        const darkIndex = window.grassDarkPositions.findIndex(p => 
+          Math.abs(p.x - grass.x) < 0.1 && Math.abs(p.z - grass.z) < 0.1
+        );
+        if (darkIndex >= 0) {
+          for (let b = 0; b < 2; b++) {
+            dummy.position.set(grass.x, 0.02, grass.z);
+            dummy.rotation.set(0, 0, 0);
+            dummy.scale.set(1.5, 0.1, 1.5);
+            dummy.updateMatrix();
+            window.grassInstancedDark.setMatrixAt(darkIndex * 2 + b, dummy.matrix);
+          }
+          darkUpdated = true;
+        }
+      }
     }
   });
+  
+  // Update instance matrices if needed
+  if (lightUpdated) window.grassInstancedLight.instanceMatrix.needsUpdate = true;
+  if (darkUpdated) window.grassInstancedDark.instanceMatrix.needsUpdate = true;
 }
 
 function checkPainting() {
@@ -2660,10 +2736,9 @@ function startLevel2() {
   currentLevel = 2;
   completed = false;
   
-  // Hide grass (already mowed)
-  grassBlades.forEach(blade => {
-    blade.visible = false;
-  });
+  // Hide grass (already mowed) - hide instanced meshes
+  if (window.grassInstancedLight) window.grassInstancedLight.visible = false;
+  if (window.grassInstancedDark) window.grassInstancedDark.visible = false;
   
   // Create and show paint sections
   if (paintSections.length === 0) {
