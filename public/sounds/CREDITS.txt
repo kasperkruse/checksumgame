@@ -25,6 +25,11 @@ Cat meow
   https://commons.wikimedia.org/wiki/File:Meow.ogg
   License: CC BY-SA 3.0
 
+Background music
+  Source: “Pleasant Creek” by Matthew Pablo
+  https://opengameart.org/content/pleasant-creek
+  License: CC-BY 3.0
+
 Whistle
   Source: “Human_whistling.ogg” by TwoWings
   https://commons.wikimedia.org/wiki/File:Human_whistling.ogg

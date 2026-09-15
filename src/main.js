@@ -25,7 +25,7 @@ let clock = new THREE.Clock();
 
 let playerPos = new THREE.Vector3(-6, 1.5, 10);
 let playerYaw = 0;
-let playerPitch = -0.18;
+let playerPitch = -0.08;
 let isPointerLocked = false;
 
 let neighbor = null;
@@ -39,7 +39,9 @@ let mowerGain = null;
 let ambientStarted = false;
 let soundBuffers = {};
 let mowerSource = null;
+let musicGain = null;
 let stepTimer = 0;
+let neighborShoutAt = 0;
 
 // First-person arms and mower handle
 let playerArms = null;
@@ -177,7 +179,7 @@ async function init() {
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.4;
+  renderer.toneMappingExposure = 1.15;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   document.getElementById('game-container').prepend(renderer.domElement);
 
@@ -271,6 +273,16 @@ function enableShadows(root) {
     if (obj.isMesh) {
       obj.castShadow = true;
       obj.receiveShadow = true;
+      const materials = Array.isArray(obj.material) ? obj.material : [obj.material];
+      materials.forEach((mat) => {
+        if (!mat) return;
+        if (mat.map) {
+          mat.map.colorSpace = THREE.SRGBColorSpace;
+          mat.map.needsUpdate = true;
+        }
+        if ('metalness' in mat) mat.metalness = 0;
+        if ('roughness' in mat) mat.roughness = 0.8;
+      });
     }
   });
 }
@@ -282,9 +294,9 @@ function loadGltf(url) {
 
 async function loadGltfModels() {
   const [houseGltf, neighborGltf, playerGltf, mowerGltf] = await Promise.all([
-    loadGltf('/models/house.glb'),
-    loadGltf('/models/neighbor-house.glb'),
-    loadGltf('/models/player.glb'),
+    loadGltf('/models/suburb/house.glb'),
+    loadGltf('/models/suburb/neighbor-house.glb'),
+    loadGltf('/models/player/player.glb'),
     loadGltf('/models/mower.glb'),
   ]);
 
@@ -1269,10 +1281,10 @@ function createFirstPersonMower() {
 
   const viewMower = mowerTemplate.clone(true);
   enableShadows(viewMower);
-  viewMower.scale.setScalar(0.85);
-  // Handles toward the camera, deck further forward and down in view
-  viewMower.rotation.set(0.28, Math.PI, 0);
-  viewMower.position.set(0, -0.55, -0.92);
+  viewMower.scale.setScalar(0.4);
+  // Keep a walk-behind mower low in the view, not up in the player's face
+  viewMower.rotation.set(0.06, Math.PI, 0);
+  viewMower.position.set(0, -1.05, -1.35);
   fpMowerHandle.add(viewMower);
 
   const skinMat = new THREE.MeshLambertMaterial({ color: 0xDEB887 });
@@ -1293,7 +1305,7 @@ function createFirstPersonMower() {
   leftHand.scale.set(1.2, 0.7, 0.9);
   leftHand.position.set(0.04, -0.04, -0.02);
   leftArm.add(leftHand);
-  leftArm.position.set(-0.2, -0.12, -0.32);
+  leftArm.position.set(-0.18, -0.38, -0.42);
   fpMowerHandle.add(leftArm);
 
   const rightArm = new THREE.Group();
@@ -1310,7 +1322,7 @@ function createFirstPersonMower() {
   rightHand.scale.set(1.2, 0.7, 0.9);
   rightHand.position.set(-0.04, -0.04, -0.02);
   rightArm.add(rightHand);
-  rightArm.position.set(0.2, -0.12, -0.32);
+  rightArm.position.set(0.18, -0.38, -0.42);
   fpMowerHandle.add(rightArm);
 
   fpMowerHandle.visible = true;
@@ -1592,6 +1604,7 @@ const SOUND_FILES = {
   whistle: '/sounds/whistle.ogg',
   paint: '/sounds/paint.ogg',
   birds: '/sounds/birds.ogg',
+  music: '/sounds/music.ogg',
   step0: '/sounds/step-0.ogg',
   step1: '/sounds/step-1.ogg',
   step2: '/sounds/step-2.ogg',
@@ -1622,7 +1635,39 @@ function playSound(name, { volume = 1, rate = 1, loop = false } = {}) {
 }
 
 function startAmbientSounds() {
-  playSound('birds', { volume: 0.18, loop: true });
+  playSound('birds', { volume: 0.12, loop: true });
+  if (soundBuffers.music) {
+    const played = playSound('music', { volume: 0.14, loop: true });
+    if (played) musicGain = played.gain;
+  }
+}
+
+function setMusicVolume(volume) {
+  if (!musicGain || !audioContext) return;
+  musicGain.gain.cancelScheduledValues(audioContext.currentTime);
+  musicGain.gain.linearRampToValueAtTime(volume, audioContext.currentTime + 0.4);
+}
+
+function shoutNeighbor(text) {
+  if (!window.speechSynthesis) return;
+  const speak = () => {
+    window.speechSynthesis.cancel();
+    const utter = new SpeechSynthesisUtterance(text);
+    utter.lang = 'da-DK';
+    utter.pitch = 0.35;
+    utter.rate = 1.08;
+    utter.volume = 1;
+    const voices = window.speechSynthesis.getVoices();
+    const danish = voices.find((v) => v.lang && v.lang.toLowerCase().startsWith('da'));
+    const male = voices.find((v) => /male|daniel|david|fred|google uk/i.test(v.name));
+    utter.voice = danish || male || voices[0] || null;
+    window.speechSynthesis.speak(utter);
+  };
+  if (window.speechSynthesis.getVoices().length) speak();
+  else {
+    window.speechSynthesis.addEventListener('voiceschanged', speak, { once: true });
+    speak();
+  }
 }
 
 function startMowerLoop() {
@@ -1964,6 +2009,9 @@ function setupControls() {
         
         if (neighborAnger <= 0) {
           neighborState = 'retreating';
+          if (window.speechSynthesis) window.speechSynthesis.cancel();
+          shoutNeighbor('Okay okay, jeg giver op!');
+          setMusicVolume(0.14);
           showDialog('NABOEN', 'Okay okay, jeg giver op! Slå dit græs...');
           setTimeout(hideDialog, 2000);
         }
@@ -2027,10 +2075,13 @@ function restartGame() {
   clearPaintSections();
   paintProgress = 0;
   
+  if (window.speechSynthesis) window.speechSynthesis.cancel();
+  setMusicVolume(0.14);
+  
   // Reset player
   playerPos.set(-6, 1.5, 10);
   playerYaw = 0;
-  playerPitch = -0.18;
+  playerPitch = -0.08;
   playerHealth = 100;
   completed = false;
   
@@ -2097,9 +2148,12 @@ function updateNeighbor() {
     neighbor.visible = true;
     // Start outside the fence, will walk to gate
     neighbor.position.set(-FENCE_SIZE - 4, 0, 0);
+    setMusicVolume(0.05);
+    shoutNeighbor('HEY! Kan du ikke stoppe den larm? Det er søndag formiddag!');
     showDialog('SUR NABO', 'HEY! Kan du ikke stoppe den larm?! Det er søndag formiddag!');
     setTimeout(() => {
       hideDialog();
+      shoutNeighbor('Jeg kommer ind og smadrer dig!');
       showDialog('SUR NABO', 'Jeg kommer ind og smadrer dig!');
       setTimeout(hideDialog, 2000);
     }, 2500);
@@ -2166,13 +2220,27 @@ function updateNeighbor() {
       // Show first-person arms, hide mower handle
       if (playerArms) playerArms.visible = true;
       if (fpMowerHandle) fpMowerHandle.visible = false;
+      shoutNeighbor('Nu skal du få tæsk!');
       showDialog('SUR NABO', 'Nu skal du få TÆSK!');
       setTimeout(hideDialog, 1500);
+      neighborShoutAt = time + 2;
     }
   }
 
   if (neighborState === 'fighting' && !showingDialog) {
     neighbor.lookAt(playerPos.x, neighbor.position.y, playerPos.z);
+
+    if (time > neighborShoutAt) {
+      const yells = [
+        'Stop den larm!',
+        'Hold kæft med den maskine!',
+        'Ud af haven!',
+        'Jeg smadrer dig!',
+        'Det er søndag!',
+      ];
+      shoutNeighbor(yells[Math.floor(Math.random() * yells.length)]);
+      neighborShoutAt = time + 2.2 + Math.random() * 1.8;
+    }
     
     const punchCycle = Math.sin(time * 8);
     neighbor.userData.leftArm.rotation.x = punchCycle > 0 ? -punchCycle * 1.5 : 0;
@@ -2188,6 +2256,7 @@ function updateNeighbor() {
       if (playerHealth <= 0) {
         showDialog('GAME OVER', 'Naboen slog dig ud! Tryk R for at prøve igen.');
         neighborState = 'won';
+        shoutNeighbor('Ha! Så blev der stille!');
         if (playerArms) playerArms.visible = false;
         if (fpMowerHandle) fpMowerHandle.visible = true;
       }
@@ -2241,6 +2310,8 @@ function updateNeighbor() {
     if (neighbor.position.x < -FENCE_SIZE - 2) {
       neighbor.visible = false;
       neighborState = 'defeated';
+      setMusicVolume(0.14);
+      if (window.speechSynthesis) window.speechSynthesis.cancel();
       document.getElementById('health-bar').classList.add('hidden');
       // Close the gate
       if (gardenGate) {
