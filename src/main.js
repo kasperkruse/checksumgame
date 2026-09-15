@@ -35,9 +35,11 @@ let showingDialog = false;
 let playerHealth = 100;
 
 let audioContext = null;
-let mowerOscillator = null;
 let mowerGain = null;
 let ambientStarted = false;
+let soundBuffers = {};
+let mowerSource = null;
+let stepTimer = 0;
 
 // First-person arms and mower handle
 let playerArms = null;
@@ -1569,8 +1571,70 @@ function createNeighbor() {
 
 function initAudio() {
   audioContext = new (window.AudioContext || window.webkitAudioContext)();
-  createAmbientSounds();
-  createMowerSound();
+  loadGameSounds().then(() => {
+    startAmbientSounds();
+    startMowerLoop();
+  }).catch((err) => {
+    console.warn('Could not load sound files, falling back to simple tones', err);
+    createAmbientSounds();
+    createMowerSound();
+  });
+}
+
+const SOUND_FILES = {
+  mower: '/sounds/mower.ogg',
+  punch: '/sounds/punch.ogg',
+  punchAlt: '/sounds/punch-alt.ogg',
+  punchHeavy: '/sounds/punch-heavy.ogg',
+  hurt: '/sounds/hurt.ogg',
+  bark: '/sounds/bark.ogg',
+  meow: '/sounds/meow.ogg',
+  whistle: '/sounds/whistle.ogg',
+  paint: '/sounds/paint.ogg',
+  birds: '/sounds/birds.ogg',
+  step0: '/sounds/step-0.ogg',
+  step1: '/sounds/step-1.ogg',
+  step2: '/sounds/step-2.ogg',
+  success: '/sounds/success.ogg',
+};
+
+async function loadGameSounds() {
+  const entries = Object.entries(SOUND_FILES);
+  await Promise.all(entries.map(async ([name, url]) => {
+    const res = await fetch(url);
+    const data = await res.arrayBuffer();
+    soundBuffers[name] = await audioContext.decodeAudioData(data);
+  }));
+}
+
+function playSound(name, { volume = 1, rate = 1, loop = false } = {}) {
+  if (!audioContext || !soundBuffers[name]) return null;
+  const src = audioContext.createBufferSource();
+  src.buffer = soundBuffers[name];
+  src.loop = loop;
+  src.playbackRate.value = rate;
+  const gain = audioContext.createGain();
+  gain.gain.value = volume;
+  src.connect(gain);
+  gain.connect(audioContext.destination);
+  src.start();
+  return { src, gain };
+}
+
+function startAmbientSounds() {
+  playSound('birds', { volume: 0.18, loop: true });
+}
+
+function startMowerLoop() {
+  if (!soundBuffers.mower) return;
+  mowerGain = audioContext.createGain();
+  mowerGain.gain.value = 0;
+  mowerGain.connect(audioContext.destination);
+  mowerSource = audioContext.createBufferSource();
+  mowerSource.buffer = soundBuffers.mower;
+  mowerSource.loop = true;
+  mowerSource.connect(mowerGain);
+  mowerSource.start();
 }
 
 function createAmbientSounds() {
@@ -1661,13 +1725,24 @@ function createMowerSound() {
 }
 
 function updateMowerSound(isMoving) {
-  if (!mowerGain) return;
-  const targetVolume = isMoving ? 0.06 : 0;
-  mowerGain.gain.linearRampToValueAtTime(targetVolume, audioContext.currentTime + 0.1);
+  if (!mowerGain || !audioContext) return;
+  const targetVolume = isMoving ? 0.28 : 0;
+  mowerGain.gain.cancelScheduledValues(audioContext.currentTime);
+  mowerGain.gain.linearRampToValueAtTime(targetVolume, audioContext.currentTime + 0.12);
 }
 
 function playPunchSound(isPlayerPunch) {
   if (!audioContext) return;
+  if (soundBuffers.punch) {
+    const name = isPlayerPunch
+      ? (Math.random() < 0.5 ? 'punch' : 'punchAlt')
+      : 'punchHeavy';
+    playSound(name, {
+      volume: isPlayerPunch ? 0.55 : 0.7,
+      rate: 0.92 + Math.random() * 0.16,
+    });
+    return;
+  }
   
   // Create punch impact sound
   const osc = audioContext.createOscillator();
@@ -1717,6 +1792,10 @@ function playPunchSound(isPlayerPunch) {
 
 function playHurtSound() {
   if (!audioContext) return;
+  if (soundBuffers.hurt) {
+    playSound('hurt', { volume: 0.55, rate: 0.9 + Math.random() * 0.2 });
+    return;
+  }
   
   const osc = audioContext.createOscillator();
   const gain = audioContext.createGain();
@@ -1737,6 +1816,10 @@ function playHurtSound() {
 
 function playDogBark() {
   if (!audioContext) return;
+  if (soundBuffers.bark) {
+    playSound('bark', { volume: 0.55, rate: 0.95 + Math.random() * 0.1 });
+    return;
+  }
   
   // Two-tone bark
   for (let i = 0; i < 2; i++) {
@@ -1762,6 +1845,10 @@ function playDogBark() {
 
 function playCatMeow() {
   if (!audioContext) return;
+  if (soundBuffers.meow) {
+    playSound('meow', { volume: 0.7, rate: 0.94 + Math.random() * 0.12 });
+    return;
+  }
   
   const osc = audioContext.createOscillator();
   const gain = audioContext.createGain();
@@ -1791,6 +1878,10 @@ function playCatMeow() {
 
 function playWifeWhistle() {
   if (!audioContext) return;
+  if (soundBuffers.whistle) {
+    playSound('whistle', { volume: 0.45 });
+    return;
+  }
   
   // Two-tone whistle
   const notes = [800, 1000, 800, 600];
@@ -1895,19 +1986,7 @@ function setupControls() {
           updateHUD();
           checkCompletion();
           
-          // Play paint swoosh sound
-          if (audioContext) {
-            const osc = audioContext.createOscillator();
-            const gain = audioContext.createGain();
-            osc.type = 'sine';
-            osc.frequency.value = 300 + Math.random() * 200;
-            gain.gain.setValueAtTime(0.1, audioContext.currentTime);
-            gain.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.2);
-            osc.connect(gain);
-            gain.connect(audioContext.destination);
-            osc.start();
-            osc.stop(audioContext.currentTime + 0.2);
-          }
+          playSound('paint', { volume: 0.45, rate: 0.9 + Math.random() * 0.25 });
         }
       }
     }
@@ -2198,6 +2277,17 @@ function update() {
       playerPos.x = Math.max(-FENCE_SIZE + 0.7, Math.min(FENCE_SIZE - 0.7, newX));
       playerPos.z = Math.max(-FENCE_SIZE + 0.7, Math.min(FENCE_SIZE - 0.7, newZ));
     }
+  }
+
+  if (isMoving && currentLevel === 1) {
+    stepTimer -= dt;
+    if (stepTimer <= 0) {
+      const step = `step${Math.floor(Math.random() * 3)}`;
+      playSound(step, { volume: 0.22, rate: 0.92 + Math.random() * 0.16 });
+      stepTimer = 0.38;
+    }
+  } else {
+    stepTimer = 0;
   }
   
   // Only play mower sound in Level 1
@@ -2582,6 +2672,8 @@ function checkCompletion() {
       document.getElementById('reward-amount').textContent = MOW_REWARD;
       document.getElementById('money').textContent = money;
       document.exitPointerLock();
+      updateMowerSound(false);
+      playSound('success', { volume: 0.5 });
 
       // Show completion modal with option to continue to level 2
       document.getElementById('completion-modal').classList.remove('hidden');
@@ -2598,6 +2690,7 @@ function checkCompletion() {
       document.getElementById('reward-amount').textContent = PAINT_REWARD;
       document.getElementById('money').textContent = money;
       document.exitPointerLock();
+      playSound('success', { volume: 0.5 });
       
       document.getElementById('completion-modal').classList.remove('hidden');
       document.querySelector('.modal-content h2').textContent = '🎨 Huset er malet!';

@@ -1,0 +1,31 @@
+Game sounds — licenses and credits
+
+Lawn mower engine
+  Source: BigSoundBank #1071 “Mower” by Joseph Sardin
+  https://bigsoundbank.com/mower-s1071.html
+  License: CC0
+
+Punch, hurt, paint, footsteps, success
+  Source: Kenney Impact Sounds and Kenney Interface Sounds
+  https://kenney.nl
+  License: CC0
+
+Birds
+  Source: “Bird chirping sounds” by syncopika
+  https://opengameart.org/content/bird-chirping-sounds
+  License: CC0
+
+Dog bark
+  Source: “Barking of a dog.ogg” by Amada44
+  https://commons.wikimedia.org/wiki/File:Barking_of_a_dog.ogg
+  License: CC BY-SA 3.0
+
+Cat meow
+  Source: “Meow.ogg” originally uploaded by Dcrosby
+  https://commons.wikimedia.org/wiki/File:Meow.ogg
+  License: CC BY-SA 3.0
+
+Whistle
+  Source: “Human_whistling.ogg” by TwoWings
+  https://commons.wikimedia.org/wiki/File:Human_whistling.ogg
+  License: Public domain
