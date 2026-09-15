@@ -74,20 +74,21 @@ let wifeNextAppearance = 0;
 // Game levels
 let currentLevel = 1; // 1 = mow grass, 2 = paint house
 let paintProgress = 0;
-let paintSections = [];
-let totalPaintSections = 0;
+let houseMeshes = [];
+let paintSplats = [];
+let paintedCells = new Set();
+let totalPaintSections = 40;
+let isPainting = false;
+let lastPaintAt = 0;
+let lastSplatPoint = null;
+let roofBirds = [];
 const PAINT_REWARD = 150;
+const PAINT_CELL = 0.48;
+const PAINT_RANGE = 4.0;
+const PAINT_COLOR = 0xF4F1EA;
 
 // Yard size (15% smaller than 14 = ~12)
 const FENCE_SIZE = 12;
-
-// House box used by both the building and paint-level wall tiles
-const HOUSE_WIDTH = 8;
-const HOUSE_HEIGHT = 4;
-const HOUSE_DEPTH = 6;
-const HOUSE_WALL_Y = 2.3;
-const UNPAINTED_WALL = 0x8B7355;
-const PAINTED_WALL = 0xF5F0E6;
 
 const keys = { w: false, a: false, s: false, d: false, space: false };
 
@@ -237,7 +238,8 @@ async function init() {
   createDog();
   createCat();
   createWife();
-  createPaintSections();
+  collectHouseMeshes();
+  createRoofBirds();
   createFirstPersonArms();
   createFirstPersonMower();
   
@@ -260,6 +262,7 @@ async function init() {
 
   document.addEventListener('pointerlockchange', () => {
     isPointerLocked = document.pointerLockElement === renderer.domElement;
+    if (!isPointerLocked) isPainting = false;
     if (!showingDialog) {
       document.getElementById('click-prompt').style.display = isPointerLocked ? 'none' : 'flex';
     }
@@ -851,9 +854,10 @@ function createDog() {
   model.rotation.y = Math.PI / 2;
   dog.add(model);
   
-  // Start position
-  dog.position.set(5, 0, 8);
-  dogTarget.set(5, 0, 8);
+  // Start in the yard, never inside the house
+  dog.position.set(Math.min(FENCE_SIZE - 2, houseBounds.maxX + 2.5), 0, 8);
+  dogTarget.copy(dog.position);
+  pushOutOfHouse(dog);
   
   scene.add(dog);
 }
@@ -961,9 +965,9 @@ function createCat() {
   tailTip.position.set(-0.35, 0.1, 0.15);
   cat.add(tailTip);
   
-  // Position cat in front of house (lying on the path/steps area)
-  cat.position.set(2, 0, 4.5);
-  cat.rotation.y = Math.PI / 4; // Facing slightly toward the yard
+  // Lie outside the front wall — never inside the house footprint
+  cat.position.set(2.6, 0, houseBounds.maxZ + 1.4);
+  cat.rotation.y = Math.PI * 0.85;
   
   scene.add(cat);
 }
@@ -1460,13 +1464,166 @@ function darkenColor(hex, factor) {
 }
 
 function isInHouseArea(x, z) {
-  const pad = 0.7;
+  const pad = 0.85;
   return (
     x > houseBounds.minX - pad &&
     x < houseBounds.maxX + pad &&
     z > houseBounds.minZ - pad &&
     z < houseBounds.maxZ + pad
   );
+}
+
+function pushOutOfHouse(obj) {
+  if (!obj || !isInHouseArea(obj.position.x, obj.position.z)) return;
+  const pad = 1.05;
+  const x = obj.position.x;
+  const z = obj.position.z;
+  const dist = {
+    minX: x - (houseBounds.minX - pad),
+    maxX: (houseBounds.maxX + pad) - x,
+    minZ: z - (houseBounds.minZ - pad),
+    maxZ: (houseBounds.maxZ + pad) - z,
+  };
+  const nearest = Object.keys(dist).reduce((a, b) => (dist[a] < dist[b] ? a : b));
+  if (nearest === 'minX') obj.position.x = houseBounds.minX - pad;
+  else if (nearest === 'maxX') obj.position.x = houseBounds.maxX + pad;
+  else if (nearest === 'minZ') obj.position.z = houseBounds.minZ - pad;
+  else obj.position.z = houseBounds.maxZ + pad;
+}
+
+function tryMoveAroundHouse(obj, dx, dz) {
+  const x = obj.position.x;
+  const z = obj.position.z;
+  const nx = x + dx;
+  const nz = z + dz;
+  if (!isInHouseArea(nx, nz)) {
+    obj.position.x = nx;
+    obj.position.z = nz;
+    return true;
+  }
+  if (!isInHouseArea(nx, z)) {
+    obj.position.x = nx;
+    return true;
+  }
+  if (!isInHouseArea(x, nz)) {
+    obj.position.z = nz;
+    return true;
+  }
+  return false;
+}
+
+function collectHouseMeshes() {
+  houseMeshes = [];
+  if (!house) return;
+  house.updateMatrixWorld(true);
+  house.traverse((child) => {
+    if (child.isMesh) houseMeshes.push(child);
+  });
+}
+
+function createSittingBird(color) {
+  const bird = new THREE.Group();
+  const bodyMat = new THREE.MeshLambertMaterial({ color });
+  const bellyMat = new THREE.MeshLambertMaterial({ color: 0xF3E6D0 });
+  const beakMat = new THREE.MeshLambertMaterial({ color: 0xE8A317 });
+  const eyeMat = new THREE.MeshLambertMaterial({ color: 0x1a1a1a });
+  const legMat = new THREE.MeshLambertMaterial({ color: 0xC45C26 });
+
+  const body = new THREE.Mesh(new THREE.SphereGeometry(0.075, 8, 6), bodyMat);
+  body.scale.set(1.2, 0.85, 1);
+  body.position.y = 0.08;
+  body.castShadow = true;
+  bird.add(body);
+
+  const belly = new THREE.Mesh(new THREE.SphereGeometry(0.048, 6, 5), bellyMat);
+  belly.position.set(0.01, 0.05, 0.015);
+  belly.scale.set(0.95, 0.7, 0.8);
+  bird.add(belly);
+
+  const head = new THREE.Group();
+  head.position.set(0.06, 0.13, 0);
+  const headMesh = new THREE.Mesh(new THREE.SphereGeometry(0.042, 8, 6), bodyMat);
+  head.add(headMesh);
+  const beak = new THREE.Mesh(new THREE.ConeGeometry(0.012, 0.038, 5), beakMat);
+  beak.rotation.z = -Math.PI / 2;
+  beak.position.set(0.032, -0.004, 0);
+  head.add(beak);
+  [-0.014, 0.014].forEach((side) => {
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.008, 5, 4), eyeMat);
+    eye.position.set(0.024, 0.01, side);
+    head.add(eye);
+  });
+  bird.add(head);
+  bird.userData.head = head;
+
+  const tail = new THREE.Mesh(new THREE.ConeGeometry(0.032, 0.085, 4), bodyMat);
+  tail.rotation.z = Math.PI / 2.5;
+  tail.position.set(-0.085, 0.09, 0);
+  bird.add(tail);
+
+  [-1, 1].forEach((side) => {
+    const wing = new THREE.Mesh(new THREE.SphereGeometry(0.042, 6, 5), bodyMat);
+    wing.scale.set(0.95, 0.32, 0.55);
+    wing.position.set(-0.01, 0.08, side * 0.052);
+    wing.rotation.y = side * 0.25;
+    bird.add(wing);
+  });
+
+  [-1, 1].forEach((side) => {
+    const foot = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, 0.028, 4), legMat);
+    foot.position.set(0.012, 0.014, side * 0.02);
+    bird.add(foot);
+  });
+
+  bird.userData.phase = Math.random() * Math.PI * 2;
+  bird.userData.turn = (Math.random() - 0.5) * 0.8;
+  return bird;
+}
+
+function createRoofBirds() {
+  roofBirds.forEach((b) => scene.remove(b));
+  roofBirds = [];
+  if (!house || houseMeshes.length === 0) return;
+
+  const colors = [0x8B6914, 0x6B5B4F, 0xC45C26, 0x5C6570, 0xA67C52];
+  const cx = (houseBounds.minX + houseBounds.maxX) * 0.5;
+  const cz = (houseBounds.minZ + houseBounds.maxZ) * 0.5;
+  const spots = [
+    [cx + 0.1, cz + 0.15],
+    [cx + 0.9, cz - 0.5],
+    [cx - 0.8, cz + 0.4],
+    [cx + 0.4, cz + 0.95],
+    [cx - 0.35, cz - 0.85],
+  ];
+  const minRoofY = (houseBounds.minY || 0) + ((houseBounds.maxY || 5) - (houseBounds.minY || 0)) * 0.48;
+  const raycaster = new THREE.Raycaster();
+  const down = new THREE.Vector3(0, -1, 0);
+
+  spots.forEach((spot, i) => {
+    const origin = new THREE.Vector3(spot[0], (houseBounds.maxY || 6) + 2.5, spot[1]);
+    raycaster.set(origin, down);
+    const hits = raycaster.intersectObjects(houseMeshes, false);
+    if (!hits.length || hits[0].point.y < minRoofY) return;
+    const bird = createSittingBird(colors[i % colors.length]);
+    bird.position.copy(hits[0].point);
+    bird.position.y += 0.02;
+    bird.rotation.y = Math.random() * Math.PI * 2;
+    bird.userData.baseY = bird.position.y;
+    scene.add(bird);
+    roofBirds.push(bird);
+  });
+}
+
+function updateRoofBirds(time) {
+  roofBirds.forEach((bird) => {
+    const phase = bird.userData.phase || 0;
+    bird.position.y = bird.userData.baseY + Math.sin(time * 2.2 + phase) * 0.008;
+    if (bird.userData.head) {
+      bird.userData.head.rotation.y = Math.sin(time * 0.7 + phase) * 0.45;
+      bird.userData.head.rotation.x = Math.sin(time * 1.4 + phase * 1.3) * 0.08;
+    }
+    bird.rotation.y += Math.sin(time * 0.15 + phase) * 0.002;
+  });
 }
 
 function isOnPath(x, z) {
@@ -2035,27 +2192,17 @@ function setupControls() {
         }
       }
     }
-    
-    // Painting in level 2
-    if (currentLevel === 2 && isPointerLocked) {
-      // Raycast to find paint sections
-      const raycaster = new THREE.Raycaster();
-      raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
-      
-      const intersects = raycaster.intersectObjects(paintSections);
-      if (intersects.length > 0) {
-        const section = intersects[0].object;
-        if (!section.userData.painted && intersects[0].distance < 8) { // Increased range
-          section.userData.painted = true;
-          section.material.color.setHex(PAINTED_WALL);
-          paintProgress++;
-          updateHUD();
-          checkCompletion();
-          
-          playSound('paint', { volume: 0.45, rate: 0.9 + Math.random() * 0.25 });
-        }
-      }
+  });
+
+  window.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    if (currentLevel === 2 && isPointerLocked && !showingDialog && neighborState !== 'fighting') {
+      isPainting = true;
     }
+  });
+
+  window.addEventListener('mouseup', () => {
+    isPainting = false;
   });
 }
 
@@ -2089,9 +2236,11 @@ function restartGame() {
   if (window.grassInstancedDark) scene.remove(window.grassInstancedDark);
   createGrass();
   
-  // Reset paint sections
-  clearPaintSections();
+  clearPaintSplats();
   paintProgress = 0;
+  isPainting = false;
+  const crosshair = document.getElementById('paint-crosshair');
+  if (crosshair) crosshair.classList.add('hidden');
   
   if (window.speechSynthesis) window.speechSynthesis.cancel();
   setMusicVolume(0.14);
@@ -2112,8 +2261,8 @@ function restartGame() {
   
   // Reset dog
   if (dog) {
-    dog.position.set(5, 0, 8);
-    dogTarget.set(5, 0, 8);
+    dog.position.set(Math.min(FENCE_SIZE - 2, houseBounds.maxX + 2.5), 0, 8);
+    dogTarget.copy(dog.position);
     dogWaitTime = 0;
     dogIsPeeing = false;
     dogPeeTime = 0;
@@ -2123,6 +2272,10 @@ function restartGame() {
   
   // Reset cat
   catMeowCooldown = 0;
+  if (cat) {
+    cat.position.set(2.6, 0, houseBounds.maxZ + 1.4);
+    pushOutOfHouse(cat);
+  }
   
   // Reset wife
   wifeState = 'inside';
@@ -2140,6 +2293,7 @@ function restartGame() {
   
   // Reset HUD
   document.getElementById('grass-display').innerHTML = '🌿 Græs slået: <span id="grass-percent">0</span>%';
+  document.getElementById('controls-hint').textContent = '⌨️ WASD + Mus';
   document.querySelector('.modal-content h2').textContent = '🎉 Græsset er slået!';
   document.getElementById('restart-btn').textContent = '🔄 Ny dag';
   document.getElementById('restart-btn').onclick = restartGame;
@@ -2424,20 +2578,41 @@ function update() {
   updateDog();
   updateCat();
   updateWife();
+  updateRoofBirds(clock.getElapsedTime());
   
   if (currentLevel === 1) {
     checkMowing();
   } else if (currentLevel === 2) {
-    checkPainting();
+    updatePaintbrush();
+    if (isPainting && isPointerLocked && !showingDialog) {
+      applyPaintStroke();
+    }
   }
   updateHUD();
   checkCompletion();
+}
+
+function pickYardTarget() {
+  let newX;
+  let newZ;
+  let tries = 0;
+  do {
+    newX = (Math.random() - 0.5) * (FENCE_SIZE - 2) * 2;
+    newZ = (Math.random() - 0.5) * (FENCE_SIZE - 2) * 2;
+    tries++;
+  } while ((isInHouseArea(newX, newZ) || isOnDeck(newX, newZ)) && tries < 20);
+  if (isInHouseArea(newX, newZ)) {
+    newX = houseBounds.maxX + 2.2;
+    newZ = houseBounds.maxZ + 2.2;
+  }
+  return { x: newX, z: newZ };
 }
 
 function updateDog() {
   if (!dog) return;
   
   const time = clock.getElapsedTime();
+  pushOutOfHouse(dog);
   
   // Check if player is too close - run away!
   const distToPlayer = dog.position.distanceTo(playerPos);
@@ -2456,10 +2631,11 @@ function updateDog() {
     newX = Math.max(-FENCE_SIZE + 1, Math.min(FENCE_SIZE - 1, newX));
     newZ = Math.max(-FENCE_SIZE + 1, Math.min(FENCE_SIZE - 1, newZ));
     
-    // Avoid house
+    // Avoid house — don't run through walls
     if (isInHouseArea(newX, newZ)) {
-      newX = dog.position.x - awayDir.x * 3;
-      newZ = dog.position.z - awayDir.z * 3;
+      const around = pickYardTarget();
+      newX = around.x;
+      newZ = around.z;
     }
     
     dogTarget.set(newX, 0, newZ);
@@ -2502,8 +2678,11 @@ function updateDog() {
     dir.normalize();
     const running = distToPlayer < 3.5;
     const speed = running ? 0.07 : 0.045;
-    dog.position.x += dir.x * speed;
-    dog.position.z += dir.z * speed;
+    const moved = tryMoveAroundHouse(dog, dir.x * speed, dir.z * speed);
+    if (!moved) {
+      const around = pickYardTarget();
+      dogTarget.set(around.x, 0, around.z);
+    }
     dog.lookAt(dog.position.x + dir.x, dog.position.y, dog.position.z + dir.z);
     
     // Trot: opposite legs move together
@@ -2544,19 +2723,14 @@ function updateDog() {
     // Pick new random target and wait
     dogWaitTime = 2 + Math.random() * 3;
     
-    // Pick new target within yard bounds (avoid house)
-    let newX, newZ;
-    do {
-      newX = (Math.random() - 0.5) * (FENCE_SIZE - 2) * 2;
-      newZ = (Math.random() - 0.5) * (FENCE_SIZE - 2) * 2;
-    } while (isInHouseArea(newX, newZ) || isOnDeck(newX, newZ));
-    
-    dogTarget.set(newX, 0, newZ);
+    const around = pickYardTarget();
+    dogTarget.set(around.x, 0, around.z);
   }
 }
 
 function updateCat() {
   if (!cat) return;
+  pushOutOfHouse(cat);
   
   // Cat just lies there, but meows if player comes close
   if (catMeowCooldown > 0) {
@@ -2570,37 +2744,44 @@ function updateCat() {
   }
 }
 
+function wifeSideSpawn() {
+  // Come out of the right side wall, not the front door
+  return {
+    x: houseBounds.maxX - 0.2,
+    z: (houseBounds.minZ + houseBounds.maxZ) * 0.5 + 0.7,
+  };
+}
+
 function updateWife() {
   if (!wife) return;
   
   const time = clock.getElapsedTime();
+  const spawn = wifeSideSpawn();
+  const outX = houseBounds.maxX + 2.6;
   
   if (wifeState === 'inside') {
     wifeTimer += 0.016;
     if (wifeTimer >= wifeNextAppearance) {
       wifeState = 'coming_out';
       wife.visible = true;
-      wife.position.set(0, 0, houseBounds.maxZ + 0.2);
-      wife.rotation.y = 0;
+      wife.position.set(spawn.x, 0, spawn.z);
+      wife.rotation.y = -Math.PI / 2; // Face +X, out of the wall
       wifeTimer = 0;
     }
   }
   
   if (wifeState === 'coming_out') {
-    // Walk out of house
-    wife.position.z += 0.03;
+    wife.position.x += 0.03;
+    wife.rotation.y = -Math.PI / 2;
     
-    // Walking animation
     const walkCycle = Math.sin(time * 10) * 0.3;
     wife.userData.leftLeg.rotation.x = walkCycle;
     wife.userData.rightLeg.rotation.x = -walkCycle;
     
-    if (wife.position.z >= houseBounds.maxZ + 2.2) {
+    if (wife.position.x >= outX) {
       wifeState = 'whistling';
       wifeTimer = 0;
-      // Whistle!
       if (audioContext) playWifeWhistle();
-      // Wave arm
       wife.userData.rightArm.rotation.z = -0.5;
       wife.userData.rightArm.rotation.x = -1.2;
     }
@@ -2609,29 +2790,29 @@ function updateWife() {
   if (wifeState === 'whistling') {
     wifeTimer += 0.016;
     
-    // Waving animation
     wife.userData.rightArm.rotation.x = -1.2 + Math.sin(time * 8) * 0.3;
     
     if (wifeTimer >= 3) {
       wifeState = 'going_in';
       wife.userData.rightArm.rotation.z = 0;
       wife.userData.rightArm.rotation.x = 0;
-      wife.rotation.y = Math.PI; // Turn around
+      wife.rotation.y = Math.PI / 2; // Face back into the wall
     }
   }
   
   if (wifeState === 'going_in') {
-    wife.position.z -= 0.03;
+    wife.position.x -= 0.03;
+    wife.rotation.y = Math.PI / 2;
     
     const walkCycle = Math.sin(time * 10) * 0.3;
     wife.userData.leftLeg.rotation.x = walkCycle;
     wife.userData.rightLeg.rotation.x = -walkCycle;
     
-    if (wife.position.z <= houseBounds.maxZ + 0.2) {
+    if (wife.position.x <= spawn.x) {
       wifeState = 'inside';
       wife.visible = false;
       wifeTimer = 0;
-      wifeNextAppearance = 15 + Math.random() * 30; // Next appearance
+      wifeNextAppearance = 15 + Math.random() * 30;
     }
   }
 }
@@ -2677,69 +2858,118 @@ function checkMowing() {
   if (darkUpdated) window.grassInstancedDark.instanceMatrix.needsUpdate = true;
 }
 
-function checkPainting() {
-  // Check if player is near unpainted house sections and clicking
-  // Painting happens through click handler
+function computePaintGoal() {
+  const w = houseBounds.maxX - houseBounds.minX;
+  const d = houseBounds.maxZ - houseBounds.minZ;
+  const h = Math.min(3.6, Math.max(2.5, (houseBounds.maxY || 4) * 0.42));
+  const area = 2 * (w + d) * h * 0.22;
+  return Math.max(36, Math.min(55, Math.round(area / 0.55)));
 }
 
-function clearPaintSections() {
-  paintSections.forEach(section => scene.remove(section));
-  paintSections = [];
-  totalPaintSections = 0;
+function paintCellKey(point) {
+  const s = PAINT_CELL;
+  return `${Math.round(point.x / s)},${Math.round(point.y / s)},${Math.round(point.z / s)}`;
 }
 
-function createPaintSections() {
-  clearPaintSections();
+function clearPaintSplats() {
+  paintSplats.forEach((splat) => scene.remove(splat));
+  paintSplats = [];
+  paintedCells = new Set();
+  lastSplatPoint = null;
+}
 
-  const unpaintedMat = new THREE.MeshLambertMaterial({
-    color: UNPAINTED_WALL,
-    side: THREE.FrontSide
+function addPaintSplat(point, normal) {
+  const radius = 0.08 + Math.random() * 0.07;
+  const geo = new THREE.CircleGeometry(radius, 10);
+  const tint = 0.92 + Math.random() * 0.06;
+  const mat = new THREE.MeshLambertMaterial({
+    color: new THREE.Color(tint, tint * 0.99, tint * 0.96),
+    side: THREE.DoubleSide,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -2,
   });
+  const splat = new THREE.Mesh(geo, mat);
+  splat.position.copy(point).addScaledVector(normal, 0.02);
+  splat.lookAt(point.clone().add(normal));
+  splat.rotateZ(Math.random() * Math.PI);
+  splat.scale.set(1.35 + Math.random() * 0.5, 0.65 + Math.random() * 0.35, 1);
+  scene.add(splat);
+  paintSplats.push(splat);
+}
 
-  const tile = 0.9;
-  const eps = 0.05;
-  const wallBottom = Math.max(0.35, (houseBounds.minY || 0) + 0.2);
-  const wallTop = Math.min(houseBounds.maxY || 5, 5.2);
-  const minX = houseBounds.minX;
-  const maxX = houseBounds.maxX;
-  const minZ = houseBounds.minZ;
-  const maxZ = houseBounds.maxZ;
-  const midX = (minX + maxX) / 2;
-  const midZ = (minZ + maxZ) / 2;
+function applyPaintStroke() {
+  if (!houseMeshes.length) return;
+  const now = clock.getElapsedTime();
+  if (now - lastPaintAt < 0.028) return;
 
-  function overlapsDoor(x, y, face) {
-    return face === 'front' && Math.abs(x - midX) < 0.7 && y < wallBottom + 2.2;
+  const raycaster = new THREE.Raycaster();
+  raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+  const hits = raycaster.intersectObjects(houseMeshes, false);
+  if (!hits.length) return;
+
+  const hit = hits[0];
+  if (hit.distance > PAINT_RANGE) return;
+
+  const normal = new THREE.Vector3();
+  if (hit.face) {
+    normal.copy(hit.face.normal).transformDirection(hit.object.matrixWorld).normalize();
+  } else {
+    normal.copy(hit.normal || new THREE.Vector3(0, 0, 1));
+  }
+  // Skip roof and ground-facing hits — only paint walls
+  if (normal.y > 0.62 || normal.y < -0.5) return;
+
+  if (lastSplatPoint && hit.point.distanceTo(lastSplatPoint) < 0.07) return;
+
+  const jitter = new THREE.Vector3(
+    (Math.random() - 0.5) * 0.05,
+    (Math.random() - 0.5) * 0.05,
+    (Math.random() - 0.5) * 0.05
+  );
+  const point = hit.point.clone().add(jitter);
+  lastSplatPoint = hit.point.clone();
+  lastPaintAt = now;
+
+  const key = paintCellKey(hit.point);
+  const already = paintedCells.has(key);
+  if (already && Math.random() < 0.65) return;
+
+  addPaintSplat(point, normal);
+  if (Math.random() < 0.55) {
+    addPaintSplat(point.clone().add(new THREE.Vector3(
+      (Math.random() - 0.5) * 0.08,
+      (Math.random() - 0.5) * 0.08,
+      (Math.random() - 0.5) * 0.08
+    )), normal);
   }
 
-  function addTile(x, y, z, rotY, face) {
-    if (overlapsDoor(x, y, face)) return;
-    const section = new THREE.Mesh(
-      new THREE.PlaneGeometry(tile, tile),
-      unpaintedMat.clone()
-    );
-    section.position.set(x, y, z);
-    section.rotation.y = rotY;
-    section.userData.painted = false;
-    section.visible = false;
-    paintSections.push(section);
-    scene.add(section);
+  paintedCells.add(key);
+  paintProgress = paintedCells.size;
+  while (paintSplats.length > 380) {
+    const old = paintSplats.shift();
+    scene.remove(old);
   }
 
-  for (let x = minX + tile / 2; x < maxX - 0.05; x += tile) {
-    for (let y = wallBottom + tile / 2; y < wallTop - 0.05; y += tile) {
-      addTile(x, y, maxZ + eps, 0, 'front');
-      addTile(x, y, minZ - eps, Math.PI, 'back');
-    }
+  if (Math.random() < 0.35) {
+    playSound('paint', { volume: 0.28, rate: 0.85 + Math.random() * 0.35 });
   }
+}
 
-  for (let z = minZ + tile / 2; z < maxZ - 0.05; z += tile) {
-    for (let y = wallBottom + tile / 2; y < wallTop - 0.05; y += tile) {
-      addTile(minX - eps, y, z, -Math.PI / 2, 'left');
-      addTile(maxX + eps, y, z, Math.PI / 2, 'right');
-    }
+function updatePaintbrush() {
+  const brush = camera.getObjectByName('paintbrush');
+  if (!brush) return;
+  const t = clock.getElapsedTime();
+  if (isPainting) {
+    const stroke = Math.sin(t * 16);
+    brush.position.set(0.30 + stroke * 0.015, -0.30 + Math.abs(stroke) * 0.02, -0.52 + stroke * 0.045);
+    brush.rotation.set(-0.32 + stroke * 0.14, 0.12, -0.22);
+  } else {
+    brush.position.lerp(new THREE.Vector3(0.32, -0.28, -0.55), 0.18);
+    brush.rotation.x += (-0.22 - brush.rotation.x) * 0.18;
+    brush.rotation.y += (0.12 - brush.rotation.y) * 0.18;
+    brush.rotation.z += (-0.18 - brush.rotation.z) * 0.18;
   }
-
-  totalPaintSections = paintSections.length;
 }
 
 function updateHUD() {
@@ -2748,8 +2978,7 @@ function updateHUD() {
     const percent = Math.floor((mowed / totalGrass) * 100);
     document.getElementById('grass-percent').textContent = percent;
   } else if (currentLevel === 2) {
-    const painted = paintSections.filter(s => s.userData.painted).length;
-    const percent = Math.floor((painted / totalPaintSections) * 100);
+    const percent = Math.min(100, Math.floor((paintedCells.size / Math.max(1, totalPaintSections)) * 100));
     document.getElementById('grass-percent').textContent = percent;
   }
   document.getElementById('money').textContent = money;
@@ -2775,8 +3004,7 @@ function checkCompletion() {
       document.getElementById('restart-btn').onclick = startLevel2;
     }
   } else if (currentLevel === 2) {
-    const painted = paintSections.filter(s => s.userData.painted).length;
-    const percent = (painted / totalPaintSections) * 100;
+    const percent = (paintedCells.size / Math.max(1, totalPaintSections)) * 100;
     
     if (percent >= 100 && !completed) {
       completed = true;
@@ -2797,87 +3025,95 @@ function checkCompletion() {
 function startLevel2() {
   currentLevel = 2;
   completed = false;
+  isPainting = false;
   
   // Hide grass (already mowed) - hide instanced meshes
   if (window.grassInstancedLight) window.grassInstancedLight.visible = false;
   if (window.grassInstancedDark) window.grassInstancedDark.visible = false;
   
-  // Recreate paint tiles flush on the house walls
-  createPaintSections();
-  paintSections.forEach(section => {
-    section.visible = true;
-    section.userData.painted = false;
-    section.material.color.setHex(UNPAINTED_WALL);
-  });
+  collectHouseMeshes();
+  clearPaintSplats();
+  totalPaintSections = computePaintGoal();
   
   // Hide mower, show paintbrush
   if (mower) mower.visible = false;
   if (fpMowerHandle) fpMowerHandle.visible = false;
   createFirstPersonPaintbrush();
   
-  // Update HUD
   document.getElementById('grass-display').innerHTML = '🎨 Malet: <span id="grass-percent">0</span>%';
+  document.getElementById('controls-hint').textContent = '🎨 Hold musen nede';
+  const crosshair = document.getElementById('paint-crosshair');
+  if (crosshair) crosshair.classList.remove('hidden');
   
-  // Close modal and resume
   document.getElementById('completion-modal').classList.add('hidden');
   renderer.domElement.requestPointerLock();
 }
 
 function createFirstPersonPaintbrush() {
-  // Remove mower handle if exists
-  if (fpMowerHandle && camera.children.includes(fpMowerHandle)) {
-    fpMowerHandle.visible = false;
-  }
-  
+  const existing = camera.getObjectByName('paintbrush');
+  if (existing) camera.remove(existing);
+  if (fpMowerHandle) fpMowerHandle.visible = false;
+
   const brush = new THREE.Group();
-  
-  const handleMat = new THREE.MeshLambertMaterial({ color: 0x8B4513 });
-  const bristleMat = new THREE.MeshLambertMaterial({ color: 0xFFFFE0 });
-  const paintMat = new THREE.MeshLambertMaterial({ color: 0xFFFFF0 }); // White paint
-  const skinMat = new THREE.MeshLambertMaterial({ color: 0xDEB887 });
-  const shirtMat = new THREE.MeshLambertMaterial({ color: 0xB22222 });
-  
-  // Brush handle
-  const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.025, 0.35, 8), handleMat);
-  handle.rotation.x = -0.3;
-  handle.position.set(0.15, -0.2, -0.4);
-  brush.add(handle);
-  
-  // Brush head (bristles)
-  const bristles = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.03, 0.08), bristleMat);
-  bristles.position.set(0.15, -0.32, -0.52);
-  bristles.rotation.x = -0.3;
-  brush.add(bristles);
-  
-  // Paint on bristles
-  const paint = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.02, 0.08), paintMat);
-  paint.position.set(0.15, -0.34, -0.52);
-  paint.rotation.x = -0.3;
-  brush.add(paint);
-  
-  // Right hand holding brush
-  const hand = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 6), skinMat);
-  hand.position.set(0.15, -0.12, -0.32);
-  hand.scale.set(1.2, 0.7, 0.9);
-  brush.add(hand);
-  
-  // Right sleeve
-  const sleeve = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.07, 0.18, 8), shirtMat);
-  sleeve.rotation.z = -0.3;
-  sleeve.position.set(0.22, -0.05, -0.25);
+  const tool = new THREE.Group();
+
+  const wood = new THREE.MeshStandardMaterial({ color: 0x6B3E26, roughness: 0.72, metalness: 0 });
+  const ferruleMat = new THREE.MeshStandardMaterial({ color: 0xC5CDD4, roughness: 0.28, metalness: 0.82 });
+  const bristleMat = new THREE.MeshStandardMaterial({ color: 0xC4A882, roughness: 0.92, metalness: 0 });
+  const paintMat = new THREE.MeshStandardMaterial({ color: 0xF7F4EE, roughness: 0.32, metalness: 0.04 });
+  const skinMat = new THREE.MeshStandardMaterial({ color: 0xE0B090, roughness: 0.7, metalness: 0 });
+  const shirtMat = new THREE.MeshStandardMaterial({ color: 0xB22222, roughness: 0.8, metalness: 0 });
+
+  // Wooden handle
+  const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.016, 0.40, 10), wood);
+  handle.rotation.z = Math.PI / 2.05;
+  tool.add(handle);
+
+  // Metal ferrule
+  const ferrule = new THREE.Mesh(new THREE.CylinderGeometry(0.017, 0.016, 0.05, 10), ferruleMat);
+  ferrule.rotation.z = Math.PI / 2.05;
+  ferrule.position.set(-0.20, 0.01, 0);
+  tool.add(ferrule);
+
+  // Bristle bundle, slightly fanned
+  const bristles = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.015, 0.095, 10), bristleMat);
+  bristles.rotation.z = Math.PI / 2.05;
+  bristles.position.set(-0.275, 0.018, 0);
+  tool.add(bristles);
+
+  const paint = new THREE.Mesh(new THREE.SphereGeometry(0.026, 8, 6), paintMat);
+  paint.scale.set(1.35, 0.5, 1.15);
+  paint.position.set(-0.33, 0.022, 0);
+  tool.add(paint);
+
+  tool.position.set(0.04, -0.02, 0);
+  tool.rotation.set(0.2, 0.45, -1.2);
+  brush.add(tool);
+
+  const palm = new THREE.Mesh(new THREE.SphereGeometry(0.042, 8, 6), skinMat);
+  palm.scale.set(1.2, 0.72, 0.95);
+  palm.position.set(0.1, -0.015, 0.02);
+  brush.add(palm);
+
+  for (let i = 0; i < 4; i++) {
+    const finger = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.011, 0.052, 6), skinMat);
+    finger.rotation.z = 1.15;
+    finger.position.set(0.035 + i * 0.011, -0.038, 0.012 - i * 0.007);
+    brush.add(finger);
+  }
+
+  const thumb = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.012, 0.042, 6), skinMat);
+  thumb.rotation.set(0.7, 0, 0.35);
+  thumb.position.set(0.135, 0.0, 0.028);
+  brush.add(thumb);
+
+  const sleeve = new THREE.Mesh(new THREE.CylinderGeometry(0.042, 0.052, 0.16, 8), shirtMat);
+  sleeve.rotation.set(0.45, 0, -0.5);
+  sleeve.position.set(0.22, 0.05, 0.08);
   brush.add(sleeve);
-  
-  // Left hand resting
-  const leftHand = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 6), skinMat);
-  leftHand.position.set(-0.2, -0.25, -0.35);
-  leftHand.scale.set(1.2, 0.7, 0.9);
-  brush.add(leftHand);
-  
-  const leftSleeve = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.07, 0.18, 8), shirtMat);
-  leftSleeve.rotation.z = 0.5;
-  leftSleeve.position.set(-0.28, -0.18, -0.28);
-  brush.add(leftSleeve);
-  
+
+  brush.position.set(0.32, -0.28, -0.55);
+  brush.rotation.set(-0.22, 0.12, -0.18);
   brush.name = 'paintbrush';
   camera.add(brush);
 }
