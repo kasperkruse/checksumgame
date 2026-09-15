@@ -15,7 +15,7 @@ let money = 0;
 let completed = false;
 let clock = new THREE.Clock();
 
-let playerPos = new THREE.Vector3(-6, 1.5, 6);
+let playerPos = new THREE.Vector3(-6, 1.5, 10);
 let playerYaw = 0;
 let playerPitch = 0;
 let isPointerLocked = false;
@@ -39,7 +39,15 @@ let punchTime = 0;
 
 // Garden gate
 let gardenGate = null;
-const GATE_POSITION = { x: -10, z: 0 };
+const GATE_POSITION = { x: -14, z: 0 };
+
+// Dog
+let dog = null;
+let dogTarget = new THREE.Vector3();
+let dogWaitTime = 0;
+
+// Yard size
+const FENCE_SIZE = 14;
 
 const keys = { w: false, a: false, s: false, d: false, space: false };
 
@@ -183,6 +191,7 @@ function init() {
   createFlowerBeds();
   createMailbox();
   createNeighbor();
+  createDog();
   createFirstPersonArms();
   createFirstPersonMower();
 
@@ -396,7 +405,7 @@ function createHouse() {
     house.add(step);
   }
 
-  house.position.set(0, 0, -5);
+  house.position.set(0, 0, 0);
   scene.add(house);
 }
 
@@ -434,7 +443,7 @@ function createNeighborHouse() {
     house.add(win);
   });
 
-  house.position.set(-22, 0, -2);
+  house.position.set(-28, 0, -2);
   scene.add(house);
 }
 
@@ -519,7 +528,7 @@ function createDeck() {
   grill.position.set(1.8, 0.2, 1);
   deck.add(grill);
 
-  deck.position.set(6, 0, -3);
+  deck.position.set(6, 0, 2);
   scene.add(deck);
 }
 
@@ -549,21 +558,23 @@ function createPath() {
   const pathMat = new THREE.MeshLambertMaterial({ color: COLORS.path });
   const stoneMat = new THREE.MeshLambertMaterial({ color: COLORS.pathStone });
   
-  const pathGeo = new THREE.PlaneGeometry(2.5, 12);
+  // Main path from house to front fence
+  const pathLen = FENCE_SIZE - 4;
+  const pathGeo = new THREE.PlaneGeometry(2.5, pathLen);
   const path = new THREE.Mesh(pathGeo, pathMat);
   path.rotation.x = -Math.PI / 2;
-  path.position.set(0, 0.02, 2);
+  path.position.set(0, 0.02, 4 + pathLen/2);
   path.receiveShadow = true;
   scene.add(path);
 
-  // Paving stones
-  for (let i = 0; i < 40; i++) {
+  // Paving stones on main path
+  for (let i = 0; i < 50; i++) {
     const stoneGeo = new THREE.BoxGeometry(0.4 + Math.random() * 0.1, 0.03, 0.3 + Math.random() * 0.1);
     const stone = new THREE.Mesh(stoneGeo, stoneMat);
     stone.position.set(
       (Math.random() - 0.5) * 2,
       0.03,
-      Math.random() * 11 - 3
+      4 + Math.random() * pathLen
     );
     stone.rotation.y = Math.random() * 0.3;
     stone.receiveShadow = true;
@@ -571,10 +582,10 @@ function createPath() {
   }
 
   // Side path to deck
-  const sidePathGeo = new THREE.PlaneGeometry(3, 1.5);
+  const sidePathGeo = new THREE.PlaneGeometry(4, 2);
   const sidePath = new THREE.Mesh(sidePathGeo, pathMat);
   sidePath.rotation.x = -Math.PI / 2;
-  sidePath.position.set(4.5, 0.02, -3);
+  sidePath.position.set(4.5, 0.02, 1.5);
   sidePath.receiveShadow = true;
   scene.add(sidePath);
 }
@@ -599,7 +610,7 @@ function createPicketFence() {
     return picket;
   };
 
-  const fenceSize = 10;
+  const fenceSize = FENCE_SIZE;
   const spacing = 0.15;
 
   // Front fence (with path gap)
@@ -626,7 +637,7 @@ function createPicketFence() {
   }
 
   // Horizontal rails - front
-  const frontRailGeo = new THREE.BoxGeometry(20, 0.08, 0.04);
+  const frontRailGeo = new THREE.BoxGeometry(fenceSize * 2, 0.08, 0.04);
   [0.3, 0.75].forEach(y => {
     const rail = new THREE.Mesh(frontRailGeo, fenceMat);
     rail.position.set(0, y, fenceSize);
@@ -641,7 +652,7 @@ function createPicketFence() {
   });
 
   // Horizontal rails - right side (full)
-  const sideRailGeo = new THREE.BoxGeometry(0.04, 0.08, 20);
+  const sideRailGeo = new THREE.BoxGeometry(0.04, 0.08, fenceSize * 2);
   [0.3, 0.75].forEach(y => {
     const railR = new THREE.Mesh(sideRailGeo, fenceMat);
     railR.position.set(fenceSize, y, 0);
@@ -649,15 +660,15 @@ function createPicketFence() {
   });
 
   // Horizontal rails - left side (split for gate)
-  const leftRailTopGeo = new THREE.BoxGeometry(0.04, 0.08, 8.8);
-  const leftRailBottomGeo = new THREE.BoxGeometry(0.04, 0.08, 8.8);
+  const leftRailLen = (fenceSize - 1.2);
+  const leftRailGeo = new THREE.BoxGeometry(0.04, 0.08, leftRailLen);
   [0.3, 0.75].forEach(y => {
-    const railTop = new THREE.Mesh(leftRailTopGeo, fenceMat);
-    railTop.position.set(-fenceSize, y, -5.6);
+    const railTop = new THREE.Mesh(leftRailGeo, fenceMat);
+    railTop.position.set(-fenceSize, y, -fenceSize/2 - 0.6);
     scene.add(railTop);
     
-    const railBottom = new THREE.Mesh(leftRailBottomGeo, fenceMat);
-    railBottom.position.set(-fenceSize, y, 5.6);
+    const railBottom = new THREE.Mesh(leftRailGeo, fenceMat);
+    railBottom.position.set(-fenceSize, y, fenceSize/2 + 0.6);
     scene.add(railBottom);
   });
 
@@ -740,10 +751,97 @@ function createGardenGate() {
   gardenGate.add(brace);
   
   // Gate is on the left side fence
-  gardenGate.position.set(-10, 0, 0);
+  gardenGate.position.set(-FENCE_SIZE, 0, 0);
   gardenGate.rotation.y = Math.PI / 2;
   
   scene.add(gardenGate);
+}
+
+function createDog() {
+  dog = new THREE.Group();
+  
+  const bodyMat = new THREE.MeshLambertMaterial({ color: 0xD2691E }); // Golden brown
+  const darkMat = new THREE.MeshLambertMaterial({ color: 0x8B4513 }); // Darker brown
+  const noseMat = new THREE.MeshLambertMaterial({ color: 0x1a1a1a });
+  const eyeMat = new THREE.MeshLambertMaterial({ color: 0x1a1a1a });
+  const tongueMat = new THREE.MeshLambertMaterial({ color: 0xFF6B6B });
+  
+  // Body
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.2, 0.5, 8), bodyMat);
+  body.rotation.z = Math.PI / 2;
+  body.position.set(0, 0.35, 0);
+  body.castShadow = true;
+  dog.add(body);
+  
+  // Head
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.15, 8, 6), bodyMat);
+  head.position.set(0.35, 0.42, 0);
+  head.scale.set(1.1, 1, 0.9);
+  head.castShadow = true;
+  dog.add(head);
+  
+  // Snout
+  const snout = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.08, 0.15, 8), bodyMat);
+  snout.rotation.z = Math.PI / 2;
+  snout.position.set(0.48, 0.38, 0);
+  dog.add(snout);
+  
+  // Nose
+  const nose = new THREE.Mesh(new THREE.SphereGeometry(0.03, 6, 4), noseMat);
+  nose.position.set(0.56, 0.38, 0);
+  dog.add(nose);
+  
+  // Eyes
+  [-0.05, 0.05].forEach(z => {
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.025, 6, 4), eyeMat);
+    eye.position.set(0.44, 0.46, z);
+    dog.add(eye);
+  });
+  
+  // Ears (floppy)
+  [-0.12, 0.12].forEach(z => {
+    const ear = new THREE.Mesh(new THREE.SphereGeometry(0.06, 6, 4), darkMat);
+    ear.position.set(0.3, 0.5, z);
+    ear.scale.set(0.5, 1, 0.8);
+    dog.add(ear);
+  });
+  
+  // Tongue (happy dog!)
+  const tongue = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.02, 0.04), tongueMat);
+  tongue.position.set(0.5, 0.32, 0);
+  tongue.rotation.x = 0.3;
+  dog.add(tongue);
+  dog.userData.tongue = tongue;
+  
+  // Legs
+  const legGeo = new THREE.CylinderGeometry(0.04, 0.04, 0.25, 6);
+  const legPositions = [
+    { x: 0.15, z: 0.1, name: 'frontLeft' },
+    { x: 0.15, z: -0.1, name: 'frontRight' },
+    { x: -0.15, z: 0.1, name: 'backLeft' },
+    { x: -0.15, z: -0.1, name: 'backRight' }
+  ];
+  
+  legPositions.forEach(pos => {
+    const leg = new THREE.Mesh(legGeo, bodyMat);
+    leg.position.set(pos.x, 0.12, pos.z);
+    leg.castShadow = true;
+    dog.add(leg);
+    dog.userData[pos.name] = leg;
+  });
+  
+  // Tail (wagging!)
+  const tail = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.04, 0.2, 6), darkMat);
+  tail.position.set(-0.3, 0.45, 0);
+  tail.rotation.z = -0.5;
+  dog.add(tail);
+  dog.userData.tail = tail;
+  
+  // Start position
+  dog.position.set(5, 0, 8);
+  dogTarget.set(5, 0, 8);
+  
+  scene.add(dog);
 }
 
 function createTrees() {
@@ -781,10 +879,13 @@ function createTrees() {
   };
 
   const treePositions = [
-    [-14, -10, 1.2], [-16, 2, 1], [-15, 8, 1.3],
-    [14, -8, 1.1], [16, 4, 1.2], [15, 10, 1],
-    [-18, -5, 0.9], [18, -2, 1.1], [-13, 12, 1],
-    [13, -14, 1.2], [-17, -14, 1.1], [17, 12, 1]
+    // Outside fence - decorative
+    [-18, -12, 1.2], [-20, 2, 1], [-19, 10, 1.3],
+    [18, -10, 1.1], [20, 4, 1.2], [19, 12, 1],
+    [-22, -5, 0.9], [22, -2, 1.1], [-17, 16, 1],
+    [17, -16, 1.2], [-21, -16, 1.1], [21, 16, 1],
+    // Inside yard corners
+    [-12, -12, 0.8], [12, -12, 0.8], [-12, 12, 0.9], [12, 12, 0.9]
   ];
 
   treePositions.forEach(([x, z, scale]) => {
@@ -820,10 +921,15 @@ function createShrubs() {
   };
 
   const shrubPositions = [
-    [-4, -8.5, 0.8], [4, -8.5, 0.8],
-    [-4.5, -6.5, 1.0], [4.5, -6.5, 1.0],
-    [9.5, -3, 0.9], [9.5, 0, 0.9], [9.5, 3, 0.9],
-    [-9.5, -3, 0.9], [-9.5, 0, 0.9], [-9.5, 3, 0.9],
+    // Around house
+    [-4, -3.5, 0.8], [4, -3.5, 0.8],
+    [-4.5, -1, 1.0], [4.5, -1, 1.0],
+    // Along right fence
+    [FENCE_SIZE - 0.5, -6, 0.9], [FENCE_SIZE - 0.5, -2, 0.9], [FENCE_SIZE - 0.5, 6, 0.9], [FENCE_SIZE - 0.5, 10, 0.9],
+    // Along left fence
+    [-FENCE_SIZE + 0.5, -6, 0.9], [-FENCE_SIZE + 0.5, -2, 0.9], [-FENCE_SIZE + 0.5, 6, 0.9], [-FENCE_SIZE + 0.5, 10, 0.9],
+    // Along back fence
+    [-6, -FENCE_SIZE + 0.5, 0.9], [0, -FENCE_SIZE + 0.5, 1.0], [6, -FENCE_SIZE + 0.5, 0.9],
   ];
 
   shrubPositions.forEach(([x, z, scale]) => {
@@ -869,8 +975,13 @@ function createFlowerBeds() {
     return bed;
   };
 
-  scene.add(createFlowerBed(-3.5, -8.5, 3));
-  scene.add(createFlowerBed(3.5, -8.5, 3));
+  // Flower beds around yard
+  scene.add(createFlowerBed(-3.5, -4, 2));
+  scene.add(createFlowerBed(3.5, -4, 2));
+  scene.add(createFlowerBed(-8, 10, 3));
+  scene.add(createFlowerBed(8, 10, 3));
+  scene.add(createFlowerBed(-10, -8, 3));
+  scene.add(createFlowerBed(10, -8, 3));
 }
 
 function createMailbox() {
@@ -893,7 +1004,7 @@ function createMailbox() {
   flag.position.set(0.16, 1.35, 0);
   mailbox.add(flag);
 
-  mailbox.position.set(8, 0, 9);
+  mailbox.position.set(2, 0, FENCE_SIZE - 0.5);
   scene.add(mailbox);
 }
 
@@ -974,49 +1085,89 @@ function createFirstPersonMower() {
   const gripMat = new THREE.MeshLambertMaterial({ color: 0x111111 });
   const skinMat = new THREE.MeshLambertMaterial({ color: 0xDEB887 });
   const shirtMat = new THREE.MeshLambertMaterial({ color: 0xB22222 });
+  const shirtDarkMat = new THREE.MeshLambertMaterial({ color: 0x8B0000 });
+  const mowerRedMat = new THREE.MeshLambertMaterial({ color: COLORS.mower });
+  const mowerBlackMat = new THREE.MeshLambertMaterial({ color: 0x1a1a1a });
+  
+  // Mower body visible at bottom of screen
+  const mowerBody = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.2, 0.4), mowerRedMat);
+  mowerBody.position.set(0, -0.55, -0.6);
+  fpMowerHandle.add(mowerBody);
+  
+  // Mower deck
+  const mowerDeck = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.08, 0.5), mowerBlackMat);
+  mowerDeck.position.set(0, -0.62, -0.6);
+  fpMowerHandle.add(mowerDeck);
   
   // Left handle bar
-  const leftHandle = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.6, 8), handleMat);
-  leftHandle.rotation.x = 0.4;
-  leftHandle.position.set(-0.18, -0.25, -0.35);
+  const leftHandle = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.7, 8), handleMat);
+  leftHandle.rotation.x = 0.5;
+  leftHandle.position.set(-0.2, -0.35, -0.45);
   fpMowerHandle.add(leftHandle);
   
   // Right handle bar  
-  const rightHandle = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.6, 8), handleMat);
-  rightHandle.rotation.x = 0.4;
-  rightHandle.position.set(0.18, -0.25, -0.35);
+  const rightHandle = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.7, 8), handleMat);
+  rightHandle.rotation.x = 0.5;
+  rightHandle.position.set(0.2, -0.35, -0.45);
   fpMowerHandle.add(rightHandle);
   
   // Cross grip bar
-  const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.42, 8), gripMat);
+  const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.48, 8), gripMat);
   grip.rotation.z = Math.PI / 2;
-  grip.position.set(0, -0.08, -0.12);
+  grip.position.set(0, -0.12, -0.18);
   fpMowerHandle.add(grip);
   
-  // Left hand on grip
-  const leftHand = new THREE.Group();
-  const leftHandMesh = new THREE.Mesh(new THREE.SphereGeometry(0.04, 8, 6), skinMat);
-  leftHandMesh.scale.set(1.2, 0.7, 0.9);
-  leftHand.add(leftHandMesh);
+  // Left arm and hand on grip
+  const leftArm = new THREE.Group();
+  // Forearm
+  const leftForearm = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.05, 0.22, 8), skinMat);
+  leftForearm.rotation.z = Math.PI / 2 + 0.4;
+  leftForearm.rotation.x = 0.2;
+  leftForearm.position.set(-0.08, 0.02, 0);
+  leftArm.add(leftForearm);
   // Sleeve
-  const leftSleeve = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.06, 0.15, 8), shirtMat);
-  leftSleeve.rotation.x = -0.3;
-  leftSleeve.position.set(0, 0.08, 0.05);
-  leftHand.add(leftSleeve);
-  leftHand.position.set(-0.12, -0.06, -0.12);
-  fpMowerHandle.add(leftHand);
+  const leftSleeve = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.065, 0.18, 8), shirtMat);
+  leftSleeve.rotation.z = Math.PI / 2 + 0.5;
+  leftSleeve.position.set(-0.2, 0.08, 0.02);
+  leftArm.add(leftSleeve);
+  // Plaid stripe
+  const leftStripe = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.015, 0.07), shirtDarkMat);
+  leftStripe.position.set(-0.2, 0.08, 0.06);
+  leftStripe.rotation.z = 0.5;
+  leftArm.add(leftStripe);
+  // Hand
+  const leftHand = new THREE.Mesh(new THREE.SphereGeometry(0.045, 8, 6), skinMat);
+  leftHand.scale.set(1.2, 0.7, 0.9);
+  leftHand.position.set(0.02, -0.02, 0);
+  leftArm.add(leftHand);
+  leftArm.position.set(-0.15, -0.1, -0.18);
+  fpMowerHandle.add(leftArm);
   
-  // Right hand on grip
-  const rightHand = new THREE.Group();
-  const rightHandMesh = new THREE.Mesh(new THREE.SphereGeometry(0.04, 8, 6), skinMat);
-  rightHandMesh.scale.set(1.2, 0.7, 0.9);
-  rightHand.add(rightHandMesh);
-  const rightSleeve = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.06, 0.15, 8), shirtMat);
-  rightSleeve.rotation.x = -0.3;
-  rightSleeve.position.set(0, 0.08, 0.05);
-  rightHand.add(rightSleeve);
-  rightHand.position.set(0.12, -0.06, -0.12);
-  fpMowerHandle.add(rightHand);
+  // Right arm and hand on grip
+  const rightArm = new THREE.Group();
+  // Forearm
+  const rightForearm = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.05, 0.22, 8), skinMat);
+  rightForearm.rotation.z = -Math.PI / 2 - 0.4;
+  rightForearm.rotation.x = 0.2;
+  rightForearm.position.set(0.08, 0.02, 0);
+  rightArm.add(rightForearm);
+  // Sleeve
+  const rightSleeve = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.065, 0.18, 8), shirtMat);
+  rightSleeve.rotation.z = -Math.PI / 2 - 0.5;
+  rightSleeve.position.set(0.2, 0.08, 0.02);
+  rightArm.add(rightSleeve);
+  // Plaid stripe
+  const rightStripe = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.015, 0.07), shirtDarkMat);
+  rightStripe.position.set(0.2, 0.08, 0.06);
+  rightStripe.rotation.z = -0.5;
+  rightArm.add(rightStripe);
+  // Hand
+  const rightHand = new THREE.Mesh(new THREE.SphereGeometry(0.045, 8, 6), skinMat);
+  rightHand.scale.set(1.2, 0.7, 0.9);
+  rightHand.position.set(-0.02, -0.02, 0);
+  rightArm.add(rightHand);
+  rightArm.position.set(0.15, -0.1, -0.18);
+  fpMowerHandle.add(rightArm);
   
   // Mower visible in first person is shown by default
   fpMowerHandle.visible = true;
@@ -1027,7 +1178,7 @@ function createGrass() {
   grassBlades = [];
   totalGrass = 0;
 
-  const fenceInner = 9.5;
+  const fenceInner = FENCE_SIZE - 0.5;
   for (let x = -fenceInner; x < fenceInner; x += 1 / GRASS_DENSITY) {
     for (let z = -fenceInner; z < fenceInner; z += 1 / GRASS_DENSITY) {
       if (isInHouseArea(x, z) || isOnPath(x, z) || isOnDeck(x, z)) continue;
@@ -1068,17 +1219,20 @@ function darkenColor(hex, factor) {
 }
 
 function isInHouseArea(x, z) {
-  return x > -5 && x < 5 && z > -10 && z < -1;
+  // House is now centered at z=0
+  return x > -5 && x < 5 && z > -4 && z < 4;
 }
 
 function isOnPath(x, z) {
-  if (Math.abs(x) < 1.5 && z > -3 && z < 9) return true;
-  if (x > 2.5 && x < 6.5 && z > -4.5 && z < -1.5) return true;
+  // Path from house front door to front fence
+  if (Math.abs(x) < 1.5 && z > 3.5 && z < FENCE_SIZE) return true;
+  // Side path to deck
+  if (x > 2.5 && x < 6.5 && z > 0 && z < 3) return true;
   return false;
 }
 
 function isOnDeck(x, z) {
-  return x > 3 && x < 9 && z > -6 && z < 0;
+  return x > 3 && x < 9.5 && z > -1 && z < 5;
 }
 
 function createMower() {
@@ -1253,7 +1407,7 @@ function createNeighbor() {
   neighbor.add(rightLeg);
   neighbor.userData.rightLeg = rightLeg;
 
-  neighbor.position.set(-18, 0, 0);
+  neighbor.position.set(-FENCE_SIZE - 6, 0, 0);
   neighbor.visible = false;
   scene.add(neighbor);
 }
@@ -1509,7 +1663,7 @@ function onWindowResize() {
 function restartGame() {
   grassBlades.forEach(blade => scene.remove(blade));
   createGrass();
-  playerPos.set(-6, 1.5, 6);
+  playerPos.set(-6, 1.5, 10);
   playerYaw = 0;
   playerPitch = 0;
   playerHealth = 100;
@@ -1518,7 +1672,13 @@ function restartGame() {
   neighborAnger = 0;
   isPunching = false;
   neighbor.visible = false;
-  neighbor.position.set(-18, 0, 0);
+  neighbor.position.set(-FENCE_SIZE - 6, 0, 0);
+  // Reset dog
+  if (dog) {
+    dog.position.set(5, 0, 8);
+    dogTarget.set(5, 0, 8);
+    dogWaitTime = 0;
+  }
   // Reset gate
   if (gardenGate) {
     gardenGate.rotation.y = Math.PI / 2;
@@ -1541,7 +1701,7 @@ function updateNeighbor() {
     neighborState = 'walking_to_gate';
     neighbor.visible = true;
     // Start outside the fence, will walk to gate
-    neighbor.position.set(-15, 0, 0);
+    neighbor.position.set(-FENCE_SIZE - 4, 0, 0);
     showDialog('SUR NABO', 'HEY! Kan du ikke stoppe den larm?! Det er søndag formiddag!');
     setTimeout(() => {
       hideDialog();
@@ -1560,7 +1720,7 @@ function updateNeighbor() {
   // Walk to gate, then through it
   if (neighborState === 'walking_to_gate' && !showingDialog) {
     // Walk toward gate position
-    const gateTarget = new THREE.Vector3(-10, 0, 0);
+    const gateTarget = new THREE.Vector3(-FENCE_SIZE, 0, 0);
     const dir = new THREE.Vector3();
     dir.subVectors(gateTarget, neighbor.position);
     dir.y = 0;
@@ -1657,7 +1817,7 @@ function updateNeighbor() {
 
   if (neighborState === 'retreating') {
     // Walk back through gate
-    const gateTarget = new THREE.Vector3(-15, 0, 0);
+    const gateTarget = new THREE.Vector3(-FENCE_SIZE - 4, 0, 0);
     const dir = new THREE.Vector3();
     dir.subVectors(gateTarget, neighbor.position);
     dir.y = 0;
@@ -1671,7 +1831,7 @@ function updateNeighbor() {
     neighbor.userData.leftLeg.rotation.x = walkCycle;
     neighbor.userData.rightLeg.rotation.x = -walkCycle;
 
-    if (neighbor.position.x < -14) {
+    if (neighbor.position.x < -FENCE_SIZE - 2) {
       neighbor.visible = false;
       neighborState = 'defeated';
       document.getElementById('health-bar').classList.add('hidden');
@@ -1706,8 +1866,8 @@ function update() {
     const newZ = playerPos.z + moveDir.z * PLAYER_SPEED;
 
     if (!isInHouseArea(newX, newZ) && !isOnDeck(newX, newZ)) {
-      playerPos.x = Math.max(-9.3, Math.min(9.3, newX));
-      playerPos.z = Math.max(-9.3, Math.min(9.3, newZ));
+      playerPos.x = Math.max(-FENCE_SIZE + 0.7, Math.min(FENCE_SIZE - 0.7, newX));
+      playerPos.z = Math.max(-FENCE_SIZE + 0.7, Math.min(FENCE_SIZE - 0.7, newZ));
     }
   }
   
@@ -1739,9 +1899,60 @@ function update() {
   });
 
   updateNeighbor();
+  updateDog();
   checkMowing();
   updateHUD();
   checkCompletion();
+}
+
+function updateDog() {
+  if (!dog) return;
+  
+  const time = clock.getElapsedTime();
+  
+  // Dog AI - wander around happily
+  if (dogWaitTime > 0) {
+    dogWaitTime -= 0.016;
+    // Idle animation - wag tail
+    dog.userData.tail.rotation.z = -0.5 + Math.sin(time * 15) * 0.4;
+    // Pant (tongue bob)
+    dog.userData.tongue.position.y = 0.32 + Math.sin(time * 8) * 0.01;
+    return;
+  }
+  
+  // Move toward target
+  const dir = new THREE.Vector3();
+  dir.subVectors(dogTarget, dog.position);
+  dir.y = 0;
+  
+  if (dir.length() > 0.3) {
+    dir.normalize();
+    dog.position.x += dir.x * 0.03;
+    dog.position.z += dir.z * 0.03;
+    dog.lookAt(dogTarget.x, dog.position.y, dogTarget.z);
+    
+    // Walking animation
+    const walkCycle = Math.sin(time * 12);
+    dog.userData.frontLeft.position.y = 0.12 + Math.abs(walkCycle) * 0.03;
+    dog.userData.frontRight.position.y = 0.12 + Math.abs(-walkCycle) * 0.03;
+    dog.userData.backLeft.position.y = 0.12 + Math.abs(-walkCycle) * 0.03;
+    dog.userData.backRight.position.y = 0.12 + Math.abs(walkCycle) * 0.03;
+    
+    // Tail wag while walking
+    dog.userData.tail.rotation.z = -0.5 + Math.sin(time * 12) * 0.3;
+  } else {
+    // Reached target, pick new random target and wait
+    dogWaitTime = 2 + Math.random() * 4;
+    
+    // Pick new target within yard bounds (avoid house)
+    let newX, newZ;
+    do {
+      newX = (Math.random() - 0.5) * (FENCE_SIZE - 2) * 2;
+      newZ = (Math.random() - 0.5) * (FENCE_SIZE - 2) * 2;
+    } while (isInHouseArea(newX, newZ) || isOnDeck(newX, newZ));
+    
+    dogTarget.set(newX, 0, newZ);
+  }
 }
 
 function checkMowing() {
