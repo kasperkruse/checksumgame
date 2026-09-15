@@ -1496,14 +1496,17 @@ function createGrass() {
   scene.add(lightGrassInstanced);
   scene.add(darkGrassInstanced);
   
-  // Store grass data for mowing (simplified tracking)
+  // Store grass data for mowing with direct instance index reference
+  let lightIdx = 0;
+  let darkIdx = 0;
   grassPositions.forEach(pos => {
+    const instanceIndex = pos.isLightStripe ? lightIdx++ : darkIdx++;
     grassBlades.push({
       x: pos.x,
       z: pos.z,
       isTall: true,
       stripeLight: pos.isLightStripe,
-      swayOffset: Math.random() * Math.PI * 2
+      instanceIndex: instanceIndex // Direct reference to instanced mesh index
     });
     totalGrass++;
   });
@@ -1511,8 +1514,6 @@ function createGrass() {
   // Store instanced meshes for later modification
   window.grassInstancedLight = lightGrassInstanced;
   window.grassInstancedDark = darkGrassInstanced;
-  window.grassLightPositions = lightPositions;
-  window.grassDarkPositions = darkPositions;
 }
 
 function darkenColor(hex, factor) {
@@ -2579,7 +2580,7 @@ function checkMowing() {
   let lightUpdated = false;
   let darkUpdated = false;
   
-  grassBlades.forEach((grass, index) => {
+  grassBlades.forEach((grass) => {
     if (!grass.isTall) return;
 
     const dist = Math.sqrt(
@@ -2590,34 +2591,20 @@ function checkMowing() {
     if (dist < MOW_RADIUS) {
       grass.isTall = false;
       
-      // Find which instanced mesh this grass belongs to and hide it (scale to nearly zero)
-      if (grass.stripeLight) {
-        const lightIndex = window.grassLightPositions.findIndex(p => 
-          Math.abs(p.x - grass.x) < 0.1 && Math.abs(p.z - grass.z) < 0.1
-        );
-        if (lightIndex >= 0) {
-          // Hide both blades at this position by scaling to nearly zero
-          for (let b = 0; b < 2; b++) {
-            dummy.position.set(grass.x, -1, grass.z); // Move below ground
-            dummy.rotation.set(0, 0, 0);
-            dummy.scale.set(0.01, 0.01, 0.01); // Essentially invisible
-            dummy.updateMatrix();
-            window.grassInstancedLight.setMatrixAt(lightIndex * 2 + b, dummy.matrix);
-          }
+      // Use direct instance index to hide grass (no searching needed)
+      const idx = grass.instanceIndex;
+      
+      // Hide both blades at this position
+      for (let b = 0; b < 2; b++) {
+        dummy.position.set(0, -10, 0); // Move far below ground
+        dummy.scale.set(0, 0, 0); // Scale to zero
+        dummy.updateMatrix();
+        
+        if (grass.stripeLight) {
+          window.grassInstancedLight.setMatrixAt(idx * 2 + b, dummy.matrix);
           lightUpdated = true;
-        }
-      } else {
-        const darkIndex = window.grassDarkPositions.findIndex(p => 
-          Math.abs(p.x - grass.x) < 0.1 && Math.abs(p.z - grass.z) < 0.1
-        );
-        if (darkIndex >= 0) {
-          for (let b = 0; b < 2; b++) {
-            dummy.position.set(grass.x, -1, grass.z); // Move below ground
-            dummy.rotation.set(0, 0, 0);
-            dummy.scale.set(0.01, 0.01, 0.01); // Essentially invisible
-            dummy.updateMatrix();
-            window.grassInstancedDark.setMatrixAt(darkIndex * 2 + b, dummy.matrix);
-          }
+        } else {
+          window.grassInstancedDark.setMatrixAt(idx * 2 + b, dummy.matrix);
           darkUpdated = true;
         }
       }
